@@ -950,7 +950,7 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
     has_explicit_project_metadata = isinstance(project_table, dict) and bool(project_table)
     if isinstance(project_table, dict):
         ws.project_name = normalize_pkg_name(project_table.get("name", project_path.name)) or project_path.name
-        ws.project_version = str(project_table.get("version", "0.1.0"))
+        ws.project_version = str(project_table.get("version", "0.0.1"))
         ws.project_description = str(project_table.get("description", ""))
         lic_val = project_table.get("license")
         if isinstance(lic_val, str):
