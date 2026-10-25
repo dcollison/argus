@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -17,6 +19,33 @@ from rhada.elf import is_binary_file, parse_binary, verify_binary_linkage
 from rhada.models import AuditConfig, ConsoleFormat, ExitCode, SbomFormat, Severity
 from rhada.reporter import render_console_report
 from rhada.sbom import serialize_sbom, write_sbom
+
+
+def _configure_streams() -> None:
+    """Ensure standard output and standard error streams use UTF-8 encoding on Windows."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            with contextlib.suppress(AttributeError, OSError, ValueError):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+_configure_streams()
+
+
+def _safe_echo_text(text: str, *, err: bool = False, nl: bool = True) -> None:
+    """Echo text to stdout/stderr with UTF-8 fallback to prevent Windows charmap/cp1252 encode errors."""
+    target_stream = sys.stderr if err else sys.stdout
+    try:
+        typer.echo(text, err=err, nl=nl)
+    except UnicodeEncodeError:
+        raw_bytes = (text + ("\n" if nl else "")).encode("utf-8", errors="replace")
+        if hasattr(target_stream, "buffer"):
+            target_stream.buffer.write(raw_bytes)
+            target_stream.buffer.flush()
+        else:
+            encoding = getattr(target_stream, "encoding", "utf-8") or "utf-8"
+            fallback_text = raw_bytes.decode(encoding, errors="replace")
+            typer.echo(fallback_text, err=err, nl=False)
 
 
 class DefaultToAuditGroup(TyperGroup):
@@ -236,7 +265,7 @@ def audit_cmd(
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR)) from exc
 
     if console_format == ConsoleFormat.JSON:
-        typer.echo(json.dumps(report.to_dict(), indent=2))
+        _safe_echo_text(json.dumps(report.to_dict(), indent=2))
     else:
         render_console_report(report, console=Console(safe_box=True))
 
@@ -283,7 +312,7 @@ def sbom_cmd(
             write_sbom(report, output_path, fmt=sbom_format.value)
             typer.echo(f"SBOM ({sbom_format.value}) written to {output_path}")
         else:
-            typer.echo(serialize_sbom(report, fmt=sbom_format.value), nl=False)
+            _safe_echo_text(serialize_sbom(report, fmt=sbom_format.value), nl=False)
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(f"Error generating SBOM: {exc}", err=True)
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR)) from exc
@@ -320,7 +349,7 @@ def notices_cmd(
             write_third_party_notices(report, output_path)
             typer.echo(f"THIRD_PARTY_NOTICES written to {output_path}")
         else:
-            typer.echo(generate_third_party_notices(report), nl=False)
+            _safe_echo_text(generate_third_party_notices(report), nl=False)
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(f"Error generating THIRD_PARTY_NOTICES: {exc}", err=True)
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR)) from exc
@@ -350,11 +379,12 @@ def inspect_elf_cmd(
         binaries.extend(parse_binary(p) for p in sorted(target.rglob("*")) if is_binary_file(p))
         linkage = verify_binary_linkage(binaries, dist_root=target)
 
-    typer.echo(json.dumps(linkage.to_dict(), indent=2))
+    _safe_echo_text(json.dumps(linkage.to_dict(), indent=2))
 
 
 def main() -> None:
     """Entrypoint for the rhada CLI."""
+    _configure_streams()
     app()
 
 

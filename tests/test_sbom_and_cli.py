@@ -276,3 +276,43 @@ def test_sbom_malformed_urls_and_same_named_components() -> None:
         assert pkg_entry["downloadLocation"] == "NOASSERTION"
 
 
+def test_cli_version_and_help_and_unicode_notices(tmp_path: Path) -> None:
+    runner = CliRunner()
+
+    # Test --version output
+    res_ver = runner.invoke(cli, ["--version"])
+    assert res_ver.exit_code == 0
+    assert "rhada, version" in res_ver.output
+
+    # Test --help output
+    res_help = runner.invoke(cli, ["--help"])
+    assert res_help.exit_code == 0
+    assert "Rhada: Legal compliance" in res_help.output
+
+    # Test Unicode notices output to stdout without charmap/cp1252 crashing
+    ws = tmp_path / "unicode_pkg"
+    ws.mkdir()
+    (ws / "pyproject.toml").write_text(
+        """
+[project]
+name = "unicode-app"
+version = "1.0.0"
+dependencies = ["unicode-pkg>=1.0.0"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    sp = ws / ".venv" / "Lib" / "site-packages"
+    create_dist_info(
+        sp,
+        "unicode-pkg",
+        "1.0.0",
+        license_str="MIT",
+        top_level=["unicode_pkg"],
+        license_files={"LICENSE": "Copyright (c) 2024 Michał Wędrowny \u0144 \u2713 \u00a9\nMIT License"},
+    )
+    res_notices = runner.invoke(cli, ["notices", "--project", str(ws)])
+    assert res_notices.exit_code == 0
+    assert "Michał Wędrowny" in res_notices.output or "\u0144" in res_notices.output
+
+
