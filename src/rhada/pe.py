@@ -7,7 +7,7 @@ import re
 import struct
 from pathlib import Path
 
-from argus.models import ElfBinaryInfo
+from rhada.models import ElfBinaryInfo
 
 DOS_MAGIC = b"MZ"
 PE_SIGNATURE = b"PE\x00\x00"
@@ -415,7 +415,7 @@ def parse_pe_bytes(raw_bytes: bytes, path_str: str = "<memory>") -> ElfBinaryInf
     utf16_strings = extract_utf16le_strings(raw_bytes, limit=400)
     combined_strings = ascii_strings + utf16_strings
 
-    from argus.elf import _infer_library_identity, _match_known_native_profile, infer_binary_provenance
+    from rhada.elf import _infer_library_identity, _match_known_native_profile, infer_binary_provenance
 
     fname = Path(path_str.replace("\\", "/")).name
     lib_name, lib_ver = _infer_library_identity(fname, soname, combined_strings)

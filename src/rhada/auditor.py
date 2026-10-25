@@ -1,12 +1,12 @@
-"""Core orchestrator for Argus source-workspace and compiled-distribution audits."""
+"""Core orchestrator for Rhada source-workspace and compiled-distribution audits."""
 
 from __future__ import annotations
 
 import httpx
 
-from argus.compliance import evaluate_compliance, write_third_party_notices
-from argus.dist import correlate_workspace_and_dist, inspect_compiled_distribution
-from argus.models import (
+from rhada.compliance import evaluate_compliance, write_third_party_notices
+from rhada.dist import correlate_workspace_and_dist, inspect_compiled_distribution
+from rhada.models import (
     AuditConfig,
     AuditMode,
     AuditReport,
@@ -14,10 +14,10 @@ from argus.models import (
     DistributionLayout,
     ExitCode,
 )
-from argus.osv import OsvClient
-from argus.reporter import write_json_report
-from argus.sbom import write_sbom
-from argus.workspace import inspect_workspace
+from rhada.osv import OsvClient
+from rhada.reporter import write_json_report
+from rhada.sbom import write_sbom
+from rhada.workspace import inspect_workspace
 
 
 def compute_exit_code(report: AuditReport, config: AuditConfig) -> ExitCode:
@@ -58,7 +58,7 @@ def run_audit(
     http_client: httpx.Client | None = None,
 ) -> AuditReport:
     """
-    Execute a full Argus compliance, SBOM, binary linkage, and security audit.
+    Execute a full Rhada compliance, SBOM, binary linkage, and security audit.
     - When `config.dist_path` is None: runs in Source-Only mode against `config.project_path`.
     - When `config.dist_path` is provided: inspects the compiled Nuitka/PyInstaller distribution,
       correlates bundled modules with workspace metadata, verifies ELF linkage, and audits
@@ -73,7 +73,7 @@ def run_audit(
         excluded = [c for c in ws.components.values() if not c.is_bundled]
         linkage_rep = None
         if ws.elf_binaries:
-            from argus.elf import verify_binary_linkage
+            from rhada.elf import verify_binary_linkage
 
             linkage_rep = verify_binary_linkage(ws.elf_binaries, dist_root=None)
         report = AuditReport(

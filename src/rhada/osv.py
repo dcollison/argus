@@ -15,7 +15,7 @@ from pip_audit._service.interface import (
 )
 from pip_audit._service.osv import OsvService
 
-from argus.models import Component, ComponentType, Severity, Vulnerability
+from rhada.models import Component, ComponentType, Severity, Vulnerability
 
 OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
@@ -82,7 +82,7 @@ def vulnerability_from_pip_audit(
     component_version: str,
     ecosystem: str = "PyPI",
 ) -> Vulnerability:
-    """Convert a `pip-audit` `VulnerabilityResult` into an Argus `Vulnerability` model."""
+    """Convert a `pip-audit` `VulnerabilityResult` into a Rhada `Vulnerability` model."""
     vuln_id = str(result.id)
     aliases = sorted(str(a) for a in result.aliases if str(a) != vuln_id)
     description = (result.description or "").strip()

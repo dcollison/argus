@@ -13,8 +13,8 @@ from typing import Any
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from argus.models import Component, ComponentScope, ComponentType, ElfBinaryInfo, LicenseInfo
-from argus.spdx import build_license_info
+from rhada.models import Component, ComponentScope, ComponentType, ElfBinaryInfo, LicenseInfo
+from rhada.spdx import build_license_info
 
 
 def normalize_pkg_name(name: str) -> str:
@@ -673,7 +673,7 @@ def _discover_dist_native_libraries(
                 comp: Component | None = None
 
                 if full_path.is_file():
-                    from argus.elf import elf_to_native_component, is_binary_file, parse_binary
+                    from rhada.elf import elf_to_native_component, is_binary_file, parse_binary
 
                     if is_binary_file(full_path):
                         with contextlib.suppress(OSError, ValueError, RuntimeError):
@@ -693,12 +693,12 @@ def _discover_dist_native_libraries(
                     # File is listed in RECORD but not present on disk (e.g. metadata-only wheel or corrupted tree)
                     if leaf.startswith("_"):
                         continue
-                    from argus.elf import (
+                    from rhada.elf import (
                         _infer_library_identity,
                         _match_known_native_profile,
                         _strip_wheel_hashes_and_arch,
                     )
-                    from argus.spdx import classify_single_spdx
+                    from rhada.spdx import classify_single_spdx
 
                     cleaned_leaf = _strip_wheel_hashes_and_arch(leaf)
                     canonical_key = cleaned_leaf.lower()
@@ -812,7 +812,7 @@ def _discover_dist_native_libraries(
                             cand_dll_path = libs_dir / dll_leaf
                             if not cand_dll_path.is_file():
                                 cand_dll_path = sp_dir / dll_leaf
-                            from argus.elf import (
+                            from rhada.elf import (
                                 _infer_library_identity,
                                 _match_known_native_profile,
                                 _strip_wheel_hashes_and_arch,
@@ -892,7 +892,7 @@ def _discover_dist_native_libraries(
                 bname_lower = bname.lower()
                 if (bname_lower.endswith(".dll") or ".so" in bname_lower) and bname not in seen_files:
                     seen_files.add(bname)
-                    from argus.elf import elf_to_native_component, is_binary_file, parse_binary
+                    from rhada.elf import elf_to_native_component, is_binary_file, parse_binary
 
                     if is_binary_file(bin_file):
                         with contextlib.suppress(OSError, ValueError, RuntimeError):

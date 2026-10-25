@@ -4,21 +4,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from argus.dist import correlate_workspace_and_dist, inspect_compiled_distribution
-from argus.elf import (
+from rhada.dist import correlate_workspace_and_dist, inspect_compiled_distribution
+from rhada.elf import (
     _parse_elf_struct_fallback,
     elf_to_native_component,
     is_elf_file,
     parse_elf_binary,
     verify_binary_linkage,
 )
-from argus.models import (
+from rhada.models import (
     BundlerType,
     DistributionLayout,
     LicenseRiskCategory,
     LinkageStatus,
 )
-from argus.workspace import inspect_workspace
+from rhada.workspace import inspect_workspace
 from tests.helpers import (
     build_pyinstaller_carchive_payload,
     build_synthetic_elf64,

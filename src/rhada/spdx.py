@@ -14,7 +14,7 @@ from license_expression import (
     get_spdx_licensing,
 )
 
-from argus.models import LicenseInfo, LicenseRiskCategory
+from rhada.models import LicenseInfo, LicenseRiskCategory
 
 _SPDX_LICENSING = get_spdx_licensing()
 

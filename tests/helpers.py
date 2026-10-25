@@ -68,7 +68,7 @@ def build_synthetic_elf64(
     for rs in rodata_strings:
         rodata_sec.extend(rs.encode("utf-8") + b"\x00")
     if not rodata_sec:
-        rodata_sec.extend(b"argus-test-rodata\x00")
+        rodata_sec.extend(b"rhada-test-rodata\x00")
 
     # 5. Build .interp section if executable and not static
     interp_bytes = b""

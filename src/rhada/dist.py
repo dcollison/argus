@@ -10,7 +10,7 @@ from pathlib import Path
 
 from defusedxml import ElementTree as ET
 
-from argus.elf import (
+from rhada.elf import (
     elf_to_native_component,
     extract_printable_strings,
     is_elf_file,
@@ -22,7 +22,7 @@ from argus.elf import (
     parse_pe_binary,
     verify_binary_linkage,
 )
-from argus.models import (
+from rhada.models import (
     BinaryLinkageReport,
     BundlerType,
     Component,
@@ -31,9 +31,9 @@ from argus.models import (
     DistributionLayout,
     ElfBinaryInfo,
 )
-from argus.pe import extract_utf16le_strings
-from argus.spdx import KNOWN_NATIVE_LIBRARIES
-from argus.workspace import (
+from rhada.pe import extract_utf16le_strings
+from rhada.spdx import KNOWN_NATIVE_LIBRARIES
+from rhada.workspace import (
     WorkspaceMetadata,
     _inspect_dist_info,
     extract_extension_module_name,
@@ -564,7 +564,7 @@ def _register_embedded_native_lib(
     if is_system_abi_lib(lib_filename) or is_windows_msvc_runtime_dll(lib_filename):
         return
 
-    from argus.elf import _infer_library_identity, _match_known_native_profile, infer_binary_provenance
+    from rhada.elf import _infer_library_identity, _match_known_native_profile, infer_binary_provenance
 
     det_name, det_ver = _infer_library_identity(lib_filename, lib_filename, strings_list)
     if det_name in ("libc", "libm", "libdl", "libpthread", "librt", "ld"):
@@ -1087,7 +1087,7 @@ def correlate_workspace_and_dist(
                     nat_comp.origin_package = ws_nat.origin_package
                     nat_comp.provenance = ws_nat.provenance
             if not nat_comp.origin_package:
-                from argus.elf import infer_binary_provenance
+                from rhada.elf import infer_binary_provenance
 
                 cand_bf = nat_comp.bundled_files[0] if nat_comp.bundled_files else ""
                 inf_pkg, inf_prov = infer_binary_provenance(cand_bf, nat_comp.name)
@@ -1114,7 +1114,7 @@ def correlate_workspace_and_dist(
                             dist_result.linkage_report.package_libraries[pkg_name].append(b_leaf)
                         break
                 if not b.origin_package:
-                    from argus.elf import infer_binary_provenance
+                    from rhada.elf import infer_binary_provenance
 
                     inf_b_pkg, inf_b_prov = infer_binary_provenance(b.path, b_leaf)
                     if inf_b_pkg and any(c.name == inf_b_pkg for c in active):

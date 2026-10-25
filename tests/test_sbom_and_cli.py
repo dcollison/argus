@@ -7,8 +7,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from argus.cli import app, cli
-from argus.models import (
+from rhada.cli import app, cli
+from rhada.models import (
     AuditMode,
     AuditReport,
     Component,
@@ -18,8 +18,8 @@ from argus.models import (
     Severity,
     Vulnerability,
 )
-from argus.sbom import generate_cyclonedx_sbom, generate_spdx_sbom, serialize_sbom
-from argus.spdx import build_license_info
+from rhada.sbom import generate_cyclonedx_sbom, generate_spdx_sbom, serialize_sbom
+from rhada.spdx import build_license_info
 from tests.helpers import build_synthetic_elf64, create_dist_info
 
 
@@ -213,7 +213,7 @@ dependencies = ["clean-pkg>=1.0.0"]
 
 
 def test_sbom_malformed_urls_and_same_named_components() -> None:
-    from argus.models import LicenseInfo
+    from rhada.models import LicenseInfo
 
     py_openssl = Component(
         name="openssl",

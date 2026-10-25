@@ -1,10 +1,10 @@
-"""Argus: Legal compliance, SBOM generation, and security auditor for Python and compiled distributions."""
+"""Rhada: Legal compliance, SBOM generation, and security auditor for Python and compiled distributions."""
 
 __version__ = "0.1.0"
 
-from argus.auditor import compute_exit_code, run_audit
-from argus.elf import is_pe_file, parse_pe_binary
-from argus.models import (
+from rhada.auditor import compute_exit_code, run_audit
+from rhada.elf import is_pe_file, parse_pe_binary
+from rhada.models import (
     AuditConfig,
     AuditMode,
     AuditReport,

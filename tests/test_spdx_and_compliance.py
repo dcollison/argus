@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from argus.compliance import (
+from rhada.compliance import (
     evaluate_compliance,
     write_third_party_notices,
 )
-from argus.models import (
+from rhada.models import (
     AuditConfig,
     AuditMode,
     AuditReport,
@@ -18,7 +18,7 @@ from argus.models import (
     LicenseRiskCategory,
     Severity,
 )
-from argus.spdx import (
+from rhada.spdx import (
     build_license_info,
     extract_copyright_notices,
     infer_spdx_from_license_text,

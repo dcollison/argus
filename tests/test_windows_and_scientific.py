@@ -9,11 +9,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from argus.auditor import run_audit
-from argus.cli import cli
-from argus.compliance import generate_third_party_notices
-from argus.dist import correlate_workspace_and_dist, inspect_compiled_distribution
-from argus.elf import (
+from rhada.auditor import run_audit
+from rhada.cli import cli
+from rhada.compliance import generate_third_party_notices
+from rhada.dist import correlate_workspace_and_dist, inspect_compiled_distribution
+from rhada.elf import (
     elf_to_native_component,
     is_binary_file,
     is_pe_file,
@@ -23,7 +23,7 @@ from argus.elf import (
     parse_pe_bytes,
     verify_binary_linkage,
 )
-from argus.models import (
+from rhada.models import (
     AuditConfig,
     AuditMode,
     AuditReport,
@@ -34,7 +34,7 @@ from argus.models import (
     LinkageStatus,
     Severity,
 )
-from argus.workspace import _inspect_dist_info, inspect_workspace
+from rhada.workspace import _inspect_dist_info, inspect_workspace
 from tests.helpers import (
     build_pyinstaller_carchive_payload,
     build_synthetic_elf64,

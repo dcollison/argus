@@ -11,7 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from argus.models import (
+from rhada.models import (
     AuditReport,
     ExitCode,
     LicenseRiskCategory,
@@ -51,7 +51,7 @@ def render_console_report(report: AuditReport, console: Console | None = None) -
     header.append("Status: ", style="bold")
     header.append(status_label, style=status_color)
 
-    out.print(Panel(header, title="[bold]Argus Compliance & Security Audit[/bold]", expand=False, safe_box=True))
+    out.print(Panel(header, title="[bold]Rhada Compliance & Security Audit[/bold]", expand=False, safe_box=True))
 
     # 1. Component Inventory Table
     # 1. Component Inventory Table

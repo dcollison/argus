@@ -9,7 +9,7 @@ import re
 import struct
 from pathlib import Path
 
-from argus.models import (
+from rhada.models import (
     BinaryLinkageReport,
     Component,
     ComponentScope,
@@ -20,7 +20,7 @@ from argus.models import (
     LinkageStatus,
     Severity,
 )
-from argus.pe import (
+from rhada.pe import (
     is_pe_bytes,
     is_pe_file,
     is_windows_compiler_runtime_dll,
@@ -28,10 +28,10 @@ from argus.pe import (
     is_windows_system_dll,
     parse_pe_bytes,
 )
-from argus.pe import (
+from rhada.pe import (
     parse_pe_binary as parse_pe_binary,
 )
-from argus.spdx import (
+from rhada.spdx import (
     KNOWN_LIBRARY_TO_PACKAGE,
     KNOWN_NATIVE_LIBRARIES,
     KNOWN_PYTHON_PACKAGES,

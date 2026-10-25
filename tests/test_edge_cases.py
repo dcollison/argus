@@ -1,4 +1,4 @@
-"""Edge case, boundary value, and error-path tests across all Argus modules."""
+"""Edge case, boundary value, and error-path tests across all Rhada modules."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ from pathlib import Path
 import httpx
 import pytest
 
-from argus.auditor import run_audit
-from argus.compliance import evaluate_compliance
-from argus.dist import inspect_compiled_distribution
-from argus.elf import (
+from rhada.auditor import run_audit
+from rhada.compliance import evaluate_compliance
+from rhada.dist import inspect_compiled_distribution
+from rhada.elf import (
     is_elf_file,
     parse_elf_binary,
     parse_elf_bytes,
     verify_binary_linkage,
 )
-from argus.models import (
+from rhada.models import (
     AuditConfig,
     AuditMode,
     BundlerType,
@@ -28,17 +28,17 @@ from argus.models import (
     LinkageStatus,
     Severity,
 )
-from argus.osv import OsvClient, compute_cvss_v3_score, score_to_severity
-from argus.reporter import format_report_text
-from argus.sbom import serialize_sbom
-from argus.spdx import (
+from rhada.osv import OsvClient, compute_cvss_v3_score, score_to_severity
+from rhada.reporter import format_report_text
+from rhada.sbom import serialize_sbom
+from rhada.spdx import (
     build_license_info,
     classify_single_spdx,
     infer_spdx_from_license_text,
     normalize_single_license,
     parse_spdx_expression,
 )
-from argus.workspace import inspect_workspace, normalize_pkg_name, parse_req_name
+from rhada.workspace import inspect_workspace, normalize_pkg_name, parse_req_name
 from tests.helpers import build_synthetic_elf64, create_dist_info
 
 
@@ -284,7 +284,7 @@ def test_misc_helper_edge_cases() -> None:
     assert score_to_severity(9.5) == Severity.CRITICAL
 
     with pytest.raises(ValueError, match="Unsupported SBOM format"):
-        from argus.models import AuditReport
+        from rhada.models import AuditReport
 
         serialize_sbom(
             AuditReport(target_name="x", target_version="1.0", mode=AuditMode.SOURCE),
@@ -337,7 +337,7 @@ def test_nested_compound_spdx_expressions_and_with_exceptions() -> None:
 def test_corrupted_pyinstaller_carchive_toc_and_hyphenated_dist_info(tmp_path: Path) -> None:
     import struct
 
-    from argus.dist import PYI_MAGIC, parse_pyinstaller_carchive_toc
+    from rhada.dist import PYI_MAGIC, parse_pyinstaller_carchive_toc
     from tests.helpers import build_pyinstaller_carchive_payload
 
     # 1. Corrupted 88-byte cookie with pkg_len larger than binary / overflowing toc_offset
@@ -455,8 +455,8 @@ source = { registry = "https://pypi.org/simple" }
 def test_dev_only_transitive_deps_and_reversed_extra_markers(tmp_path: Path) -> None:
     from typer.testing import CliRunner
 
-    from argus.cli import cli
-    from argus.models import ComponentScope
+    from rhada.cli import cli
+    from rhada.models import ComponentScope
 
     # Project with zero runtime dependencies and dev-only pytest -> pluggy transitive dependency
     (tmp_path / "pyproject.toml").write_text(
@@ -530,8 +530,8 @@ source = { registry = "https://pypi.org/simple" }
 
 
 def test_compound_spdx_multiword_unknown_and_metadata_placeholders(tmp_path: Path) -> None:
-    from argus.models import LicenseInfo, Vulnerability
-    from argus.spdx import evaluate_spdx_denylist
+    from rhada.models import LicenseInfo, Vulnerability
+    from rhada.spdx import evaluate_spdx_denylist
 
     # 1. Multi-word licence names inside compound AND expression must not be misclassified as permissive MIT
     spdx_mw, cat_mw, is_dual_mw, choices_mw = parse_spdx_expression("MIT License AND GPLv3")

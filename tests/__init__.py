@@ -1,1 +1,1 @@
-"""Argus test suite."""
+"""Rhada test suite."""

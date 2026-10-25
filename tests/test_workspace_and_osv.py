@@ -6,9 +6,9 @@ from pathlib import Path
 
 import httpx
 
-from argus.models import Component, ComponentScope, ComponentType, Severity
-from argus.osv import OsvClient, compute_cvss_v3_score, parse_osv_vulnerability
-from argus.workspace import inspect_workspace
+from rhada.models import Component, ComponentScope, ComponentType, Severity
+from rhada.osv import OsvClient, compute_cvss_v3_score, parse_osv_vulnerability
+from rhada.workspace import inspect_workspace
 from tests.helpers import create_dist_info
 
 

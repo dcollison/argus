@@ -47,8 +47,8 @@ from cyclonedx.output.json import JsonV1Dot5
 from cyclonedx.spdx import fixup_id, is_expression
 from packageurl import PackageURL
 
-from argus import __version__
-from argus.models import AuditReport, Component, Severity
+from rhada import __version__
+from rhada.models import AuditReport, Component, Severity
 
 HASH_ALG_CYCLONEDX: dict[str, HashAlgorithm] = {
     "SHA256": HashAlgorithm.SHA_256,
@@ -135,7 +135,7 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
 
     bom = Bom()
     bom.metadata.tools.tools.add(
-        Tool(vendor="Argus DevSecOps", name="argus", version=__version__)
+        Tool(vendor="Rhada DevSecOps", name="rhada", version=__version__)
     )
     root_component = CdxComponent(
         name=report.target_name,
@@ -143,9 +143,9 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
         type=CdxComponentType.APPLICATION,
         bom_ref=root_ref,
         properties=[
-            Property(name="argus:mode", value=report.mode.value),
-            Property(name="argus:bundler", value=report.bundler_type.value),
-            Property(name="argus:layout", value=report.layout.value),
+            Property(name="rhada:mode", value=report.mode.value),
+            Property(name="rhada:bundler", value=report.bundler_type.value),
+            Property(name="rhada:layout", value=report.layout.value),
         ],
     )
     bom.metadata.component = root_component
@@ -180,19 +180,19 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
                 )
 
         props = [
-            Property(name="argus:component_type", value=comp.component_type.value),
-            Property(name="argus:license_risk", value=comp.license_info.risk_category.value),
-            Property(name="argus:statically_compiled", value=str(comp.is_statically_compiled).lower()),
-            Property(name="argus:dynamic_relinking", value=str(comp.has_dynamic_relinking).lower()),
+            Property(name="rhada:component_type", value=comp.component_type.value),
+            Property(name="rhada:license_risk", value=comp.license_info.risk_category.value),
+            Property(name="rhada:statically_compiled", value=str(comp.is_statically_compiled).lower()),
+            Property(name="rhada:dynamic_relinking", value=str(comp.has_dynamic_relinking).lower()),
         ]
         if comp.origin_package:
-            props.append(Property(name="argus:origin_package", value=comp.origin_package))
+            props.append(Property(name="rhada:origin_package", value=comp.origin_package))
         if comp.provenance:
-            props.append(Property(name="argus:provenance", value=comp.provenance))
+            props.append(Property(name="rhada:provenance", value=comp.provenance))
         if comp.architecture:
-            props.append(Property(name="argus:architecture", value=comp.architecture))
+            props.append(Property(name="rhada:architecture", value=comp.architecture))
         if comp.soname:
-            props.append(Property(name="argus:soname", value=comp.soname))
+            props.append(Property(name="rhada:soname", value=comp.soname))
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -230,7 +230,7 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
         for d in comp.dependencies:
             target_cdx = name_to_cdx_comp.get(d) or name_to_cdx_comp.get(d.lower())
             if not target_cdx:
-                from argus.elf import _strip_wheel_hashes_and_arch
+                from rhada.elf import _strip_wheel_hashes_and_arch
 
                 cleaned_d = _strip_wheel_hashes_and_arch(d)
                 target_cdx = name_to_cdx_comp.get(cleaned_d) or name_to_cdx_comp.get(cleaned_d.lower())
@@ -401,7 +401,7 @@ def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
         for dep_name in comp.dependencies:
             target_id = name_to_spdx_id.get(dep_name) or name_to_spdx_id.get(dep_name.lower())
             if not target_id:
-                from argus.elf import _strip_wheel_hashes_and_arch
+                from rhada.elf import _strip_wheel_hashes_and_arch
 
                 cleaned_dep = _strip_wheel_hashes_and_arch(dep_name)
                 target_id = name_to_spdx_id.get(cleaned_dep) or name_to_spdx_id.get(cleaned_dep.lower())
@@ -431,7 +431,7 @@ def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
         "documentNamespace": f"https://spdx.org/spdxdocs/{report.target_name}-{report.target_version}-{doc_uuid}",
         "creationInfo": {
             "created": report.timestamp,
-            "creators": [f"Tool: argus-{__version__}"],
+            "creators": [f"Tool: rhada-{__version__}"],
             "licenseListVersion": "3.25",
         },
         "documentDescribes": [root_spdx_id],

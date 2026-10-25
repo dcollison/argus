@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from argus.models import (
+from rhada.models import (
     AuditConfig,
     AuditMode,
     AuditReport,
@@ -14,7 +14,7 @@ from argus.models import (
     LicenseRiskCategory,
     Severity,
 )
-from argus.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist
+from rhada.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist
 
 # Canonical fallback licence summaries when a wheel omits a verbatim LICENSE file
 CANONICAL_LICENSE_FALLBACKS: dict[str, str] = {

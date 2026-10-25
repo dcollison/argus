@@ -7,18 +7,18 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from argus.auditor import run_audit
-from argus.cli import cli
-from argus.dist import (
+from rhada.auditor import run_audit
+from rhada.cli import cli
+from rhada.dist import (
     correlate_workspace_and_dist,
     inspect_compiled_distribution,
 )
-from argus.elf import (
+from rhada.elf import (
     infer_binary_provenance,
     parse_binary,
     verify_binary_linkage,
 )
-from argus.models import (
+from rhada.models import (
     AuditConfig,
     AuditMode,
     Component,
@@ -27,9 +27,9 @@ from argus.models import (
     ElfBinaryInfo,
     LicenseInfo,
 )
-from argus.reporter import format_report_text
-from argus.sbom import generate_cyclonedx_sbom, generate_spdx_sbom
-from argus.workspace import inspect_workspace
+from rhada.reporter import format_report_text
+from rhada.sbom import generate_cyclonedx_sbom, generate_spdx_sbom
+from rhada.workspace import inspect_workspace
 from tests.helpers import (
     build_pyinstaller_carchive_payload,
     build_synthetic_elf64,
@@ -362,10 +362,10 @@ def test_cyclonedx_and_spdx_sbom_provenance(tmp_path: Path) -> None:
     assert "openblas" in cdx_comps
     blas_props = {p["name"]: p["value"] for p in cdx_comps["openblas"].get("properties", [])}
 
-    assert blas_props.get("argus:origin_package") == "numpy"
-    assert blas_props.get("argus:provenance") == "vendored-in-wheel:numpy"
-    assert blas_props.get("argus:architecture") == "x86_64"
-    assert blas_props.get("argus:soname") == "libopenblas.so.0"
+    assert blas_props.get("rhada:origin_package") == "numpy"
+    assert blas_props.get("rhada:provenance") == "vendored-in-wheel:numpy"
+    assert blas_props.get("rhada:architecture") == "x86_64"
+    assert blas_props.get("rhada:soname") == "libopenblas.so.0"
 
     # Dependency relationships in CycloneDX
     deps = {d["ref"]: d.get("dependsOn", []) for d in cdx_data.get("dependencies", [])}
@@ -500,9 +500,9 @@ def test_record_with_corrupted_lines_and_missing_files(tmp_path: Path) -> None:
 
 def test_compliance_evaluation_for_permissive_native_licences() -> None:
     """Verify permissive native licences (libpng-2.0, IJG, libtiff) pass compliance."""
-    from argus.compliance import evaluate_compliance
-    from argus.models import DistributionLayout, LicenseRiskCategory
-    from argus.spdx import classify_single_spdx
+    from rhada.compliance import evaluate_compliance
+    from rhada.models import DistributionLayout, LicenseRiskCategory
+    from rhada.spdx import classify_single_spdx
 
     assert classify_single_spdx("libpng-2.0") == LicenseRiskCategory.PERMISSIVE
     assert classify_single_spdx("IJG") == LicenseRiskCategory.PERMISSIVE
@@ -532,8 +532,8 @@ def test_compliance_evaluation_for_permissive_native_licences() -> None:
 
 def test_correlate_workspace_and_dist_with_flattened_dlls(tmp_path: Path) -> None:
     """Verify correlate_workspace_and_dist cross-references flattened binaries with workspace package_libraries."""
-    from argus.dist import DistInspectionResult
-    from argus.workspace import WorkspaceMetadata
+    from rhada.dist import DistInspectionResult
+    from rhada.workspace import WorkspaceMetadata
 
     ws = WorkspaceMetadata(root_path=tmp_path)
     ws_numpy = Component(
@@ -705,7 +705,7 @@ def test_workspace_delvewheel_manifest_parsing(tmp_path: Path) -> None:
 
 def test_sbom_intra_native_dependency_resolution() -> None:
     """Verify CycloneDX and SPDX SBOM generation links native library dependencies to each other."""
-    from argus.models import AuditReport
+    from rhada.models import AuditReport
 
     pkg_comp = Component(
         name="scipy",

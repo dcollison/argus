@@ -1,4 +1,4 @@
-"""Command-line interface for Argus compliance, SBOM, binary linkage, and security auditing."""
+"""Command-line interface for Rhada compliance, SBOM, binary linkage, and security auditing."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ import typer
 from rich.console import Console
 from typer.core import TyperGroup
 
-from argus import __version__
-from argus.auditor import run_audit
-from argus.compliance import generate_third_party_notices, write_third_party_notices
-from argus.elf import is_binary_file, parse_binary, verify_binary_linkage
-from argus.models import AuditConfig, ConsoleFormat, ExitCode, SbomFormat, Severity
-from argus.reporter import render_console_report
-from argus.sbom import serialize_sbom, write_sbom
+from rhada import __version__
+from rhada.auditor import run_audit
+from rhada.compliance import generate_third_party_notices, write_third_party_notices
+from rhada.elf import is_binary_file, parse_binary, verify_binary_linkage
+from rhada.models import AuditConfig, ConsoleFormat, ExitCode, SbomFormat, Severity
+from rhada.reporter import render_console_report
+from rhada.sbom import serialize_sbom, write_sbom
 
 
 class DefaultToAuditGroup(TyperGroup):
@@ -32,8 +32,8 @@ class DefaultToAuditGroup(TyperGroup):
 
 app = typer.Typer(
     cls=DefaultToAuditGroup,
-    name="argus",
-    help="Argus: Legal compliance, SBOM generation, binary linkage, and security auditor.",
+    name="rhada",
+    help="Rhada: Legal compliance, SBOM generation, binary linkage, and security auditor.",
     context_settings={"help_option_names": ["-h", "--help"]},
     add_completion=False,
     no_args_is_help=False,
@@ -45,7 +45,7 @@ cli = app
 
 def _version_callback(value: bool) -> None:
     if value:
-        typer.echo(f"argus, version {__version__}")
+        typer.echo(f"rhada, version {__version__}")
         raise typer.Exit()
 
 
@@ -73,7 +73,7 @@ def main_callback(
         ),
     ] = False,
 ) -> None:
-    """Argus: Legal compliance, SBOM generation, binary linkage, and security auditor."""
+    """Rhada: Legal compliance, SBOM generation, binary linkage, and security auditor."""
 
 
 @app.command("audit")
@@ -354,7 +354,7 @@ def inspect_elf_cmd(
 
 
 def main() -> None:
-    """Entrypoint for the argus CLI."""
+    """Entrypoint for the rhada CLI."""
     app()
 
 

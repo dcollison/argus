@@ -1,4 +1,4 @@
-"""Core data models for Argus audit reports, components, ELF linkage, compliance, and vulnerabilities."""
+"""Core data models for Rhada audit reports, components, ELF linkage, compliance, and vulnerabilities."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class ExitCode(IntEnum):
 
 
 class AuditMode(StrEnum):
-    """Operating mode of the Argus audit."""
+    """Operating mode of the Rhada audit."""
 
     SOURCE = "source"
     COMPILED_DIST = "compiled-dist"
@@ -405,7 +405,7 @@ class ComplianceFinding:
 
 @dataclass(slots=True)
 class AuditConfig:
-    """Configuration for an Argus audit run."""
+    """Configuration for a Rhada audit run."""
 
     project_path: Path = field(default_factory=lambda: Path("."))
     dist_path: Path | None = None
@@ -427,7 +427,7 @@ class AuditConfig:
 
 @dataclass(slots=True)
 class AuditReport:
-    """Complete result of an Argus audit."""
+    """Complete result of a Rhada audit."""
 
     target_name: str
     target_version: str
