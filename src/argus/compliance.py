@@ -1,0 +1,447 @@
+"""Legal and licensing compliance engine and turnkey THIRD_PARTY_NOTICES generator."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from argus.models import (
+    AuditConfig,
+    AuditMode,
+    AuditReport,
+    ComplianceFinding,
+    Component,
+    DistributionLayout,
+    LicenseRiskCategory,
+    Severity,
+)
+from argus.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist
+
+# Canonical fallback licence summaries when a wheel omits a verbatim LICENSE file
+CANONICAL_LICENSE_FALLBACKS: dict[str, str] = {
+    "MIT": (
+        "MIT License\n\n"
+        "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and "
+        "associated documentation files (the \"Software\"), to deal in the Software without restriction, "
+        "including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, "
+        "and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, "
+        "subject to the following conditions:\n\n"
+        "The above copyright notice and this permission notice shall be included in all copies or substantial "
+        "portions of the Software.\n\n"
+        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED."
+    ),
+    "Apache-2.0": (
+        "Apache License, Version 2.0\n\n"
+        "Licensed under the Apache License, Version 2.0 (the \"License\"); you may not use this component "
+        "except in compliance with the License. You may obtain a copy of the License at:\n"
+        "    http://www.apache.org/licenses/LICENSE-2.0\n\n"
+        "Unless required by applicable law or agreed to in writing, software distributed under the License "
+        "is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied."
+    ),
+    "BSD-3-Clause": (
+        "BSD 3-Clause License\n\n"
+        "Redistribution and use in source and binary forms, with or without modification, are permitted "
+        "provided that the following conditions are met:\n"
+        "1. Redistributions of source code must retain the above copyright notice, this list of conditions "
+        "and the following disclaimer.\n"
+        "2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions "
+        "and the following disclaimer in the documentation and/or other materials provided with the distribution.\n"
+        "3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse "
+        "or promote products derived from this software without specific prior written permission."
+    ),
+    "BSD-2-Clause": (
+        "BSD 2-Clause Simplified License\n\n"
+        "Redistribution and use in source and binary forms, with or without modification, are permitted "
+        "provided that the following conditions are met:\n"
+        "1. Redistributions of source code must retain the above copyright notice, this list of conditions "
+        "and the following disclaimer.\n"
+        "2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions "
+        "and the following disclaimer in the documentation and/or other materials provided with the distribution."
+    ),
+    "ISC": (
+        "ISC License\n\n"
+        "Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee "
+        "is hereby granted, provided that the above copyright notice and this permission notice appear in all copies."
+    ),
+    "PSF-2.0": (
+        "Python Software Foundation License Version 2\n\n"
+        "This software is licensed under the Python Software Foundation License Version 2. "
+        "Full text available at https://docs.python.org/3/license.html"
+    ),
+    "MPL-2.0": (
+        "Mozilla Public License Version 2.0\n\n"
+        "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. "
+        "If a copy of the MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/."
+    ),
+    "LicenseRef-Intel-Simplified-Software-License": (
+        "Intel Simplified Software License\n\n"
+        "Use and redistribution of the Intel Math Kernel Library (MKL) binaries are permitted "
+        "provided that the Intel copyright notice and license conditions are preserved."
+    ),
+}
+
+
+def evaluate_compliance(
+    components: list[Component],
+    mode: AuditMode,
+    layout: DistributionLayout,
+    config: AuditConfig,
+) -> list[ComplianceFinding]:
+    """
+    Evaluate all active/bundled components for legal and licence compliance risks.
+    Detects strong copyleft contamination, LGPL static/monolithic relinking violations,
+    proprietary dependencies, unknown licences, and explicit policy allow/deny rules.
+    """
+    findings: list[ComplianceFinding] = []
+    denied_upper = {d.strip().upper() for d in config.denied_licenses if d.strip()}
+    allowed_upper = {a.strip().upper() for a in config.allowed_licenses if a.strip()}
+
+    for comp in components:
+        if not comp.is_bundled:
+            continue
+
+        lic = comp.license_info
+        spdx_id = lic.spdx_id or "NOASSERTION"
+        choices = lic.license_choices or [spdx_id]
+        choices_upper = {c.upper() for c in choices}
+
+        # 1. Explicit Denied Licence Policy Check
+        is_denied = denied_upper and (
+            evaluate_spdx_denylist(spdx_id, denied_upper)
+            or (not lic.is_dual_licensed and bool(choices_upper & denied_upper))
+        )
+        if is_denied:
+            findings.append(
+                ComplianceFinding(
+                    rule_id="LIC-POLICY-DENIED",
+                    component_name=comp.name,
+                    component_version=comp.version,
+                    license_spdx=spdx_id,
+                    risk_category=lic.risk_category,
+                    severity=Severity.CRITICAL,
+                    title=f"Explicitly denied licence ({spdx_id})",
+                    description=(
+                        f"Component '{comp.name}@{comp.version}' is licensed under '{spdx_id}', "
+                        "which is explicitly forbidden by the active deny-list policy."
+                    ),
+                    remediation=f"Remove '{comp.name}' or replace it with a dependency under an approved licence.",
+                )
+            )
+            continue
+
+        # 2. Explicit Allowed Licence Policy Check
+        if allowed_upper:
+            is_permitted = evaluate_spdx_allowlist(spdx_id, allowed_upper) or (
+                lic.is_dual_licensed and bool(choices_upper & allowed_upper)
+            )
+
+            if not is_permitted:
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-POLICY-NOT-ALLOWED",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=Severity.HIGH,
+                        title=f"Licence '{spdx_id}' not in policy allow-list",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' declares licence '{spdx_id}', "
+                            f"which is not among the approved licences ({', '.join(sorted(config.allowed_licenses))})."
+                        ),
+                        remediation=f"Request legal exception for '{spdx_id}' or replace '{comp.name}'.",
+                    )
+                )
+
+        # 3. Strong Copyleft (GPL / AGPL / SSPL)
+        if lic.risk_category == LicenseRiskCategory.STRONG_COPYLEFT:
+            is_network_copyleft = any(k in spdx_id.upper() for k in ("AGPL", "SSPL"))
+            if is_network_copyleft:
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-COP-NETWORK",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=Severity.CRITICAL,
+                        title=f"Network Copyleft contamination ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' is governed by '{spdx_id}'. "
+                            "Network copyleft mandates disclosure of the complete corresponding source code "
+                            "of the combined application both upon distribution and when users interact with "
+                            "it over a network."
+                        ),
+                        remediation=(
+                            f"Eliminate '{comp.name}' from commercial builds or obtain a commercial "
+                            "exception licence from the copyright holder."
+                        ),
+                    )
+                )
+            else:
+                sev = Severity.CRITICAL if mode == AuditMode.COMPILED_DIST else Severity.HIGH
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-COP-STRONG",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=sev,
+                        title=f"Strong Copyleft licence in distribution ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' is governed by strong copyleft ('{spdx_id}'). "
+                            "Distributing a binary or application linked with GPL components requires releasing "
+                            "the entire combined work's source code under GPL terms."
+                        ),
+                        remediation=(
+                            f"Replace '{comp.name}' with a permissive alternative, isolate it into a separate "
+                            "process via clean IPC, or license the entire distribution under GPL."
+                        ),
+                    )
+                )
+
+        # 4. Weak Copyleft (LGPL / MPL / EPL / CDDL)
+        elif lic.risk_category == LicenseRiskCategory.WEAK_COPYLEFT:
+            is_lgpl = "LGPL" in spdx_id.upper()
+            is_opaque_bundle = (
+                layout == DistributionLayout.MONOLITHIC_BINARY
+                or comp.is_statically_compiled
+                or not comp.has_dynamic_relinking
+            )
+            if is_lgpl and mode == AuditMode.COMPILED_DIST and is_opaque_bundle:
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-LGPL-MONOLITHIC",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=Severity.HIGH,
+                        title=f"LGPL component locked in monolithic/static binary without relinking ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' ({spdx_id}) is bundled inside an opaque "
+                            f"monolithic executable or statically compiled C module ({layout.value}). "
+                            "LGPL Section 4(d) / Section 6 requires that recipients be able to modify the "
+                            "LGPL library and relink or replace it in the executable."
+                        ),
+                        remediation=(
+                            "Switch from a monolithic onefile build to a standalone directory build where "
+                            f"'{comp.name}' remains a dynamically loaded shared library (.so) or separate "
+                            "Python module, or provide relinkable object files alongside the binary."
+                        ),
+                    )
+                )
+            elif is_lgpl:
+                sev = Severity.MEDIUM if mode == AuditMode.COMPILED_DIST else Severity.LOW
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-LGPL-DYNAMIC",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=sev,
+                        title=f"Weak Copyleft (LGPL) dynamic relinking & attribution obligation ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' is licensed under '{spdx_id}'. "
+                            "Commercial redistribution is permitted provided the library remains dynamically "
+                            "replaceable and full LGPL licence text and copyright notices are included."
+                        ),
+                        remediation=(
+                            f"Include THIRD_PARTY_NOTICES with full '{spdx_id}' text and keep '{comp.name}' "
+                            "as a dynamically linked .so or replaceable module."
+                        ),
+                    )
+                )
+            else:
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-COP-WEAK",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=Severity.LOW,
+                        title=f"File-level Weak Copyleft obligation ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' is licensed under '{spdx_id}'. "
+                            "Any modifications directly to files originating from this component must be "
+                            "made available under the same licence."
+                        ),
+                        remediation="Include attribution in THIRD_PARTY_NOTICES and retain unmodified upstream files.",
+                    )
+                )
+
+        # 5. Proprietary / Commercial Licence
+        elif lic.risk_category == LicenseRiskCategory.PROPRIETARY:
+            findings.append(
+                ComplianceFinding(
+                    rule_id="LIC-PROPRIETARY",
+                    component_name=comp.name,
+                    component_version=comp.version,
+                    license_spdx=spdx_id,
+                    risk_category=lic.risk_category,
+                    severity=Severity.HIGH,
+                    title=f"Proprietary or commercial licence detected ({spdx_id})",
+                    description=(
+                        f"Component '{comp.name}@{comp.version}' declares a proprietary or non-OSI "
+                        f"commercial licence ('{lic.declared_raw}')."
+                    ),
+                    remediation=f"Verify that your organisation holds a valid redistribution licence for '{comp.name}'.",
+                )
+            )
+
+        # 6. Unknown / Unasserted Licence
+        elif lic.risk_category == LicenseRiskCategory.UNKNOWN:
+            sev = Severity.LOW if config.allow_unknown_license else Severity.MEDIUM
+            findings.append(
+                ComplianceFinding(
+                    rule_id="LIC-UNKNOWN",
+                    component_name=comp.name,
+                    component_version=comp.version,
+                    license_spdx=spdx_id,
+                    risk_category=lic.risk_category,
+                    severity=sev,
+                    title=f"Undeclared or unrecognised licence for '{comp.name}'",
+                    description=(
+                        f"Component '{comp.name}@{comp.version}' has raw licence metadata '{lic.declared_raw}' "
+                        "which could not be resolved to a recognised SPDX identifier."
+                    ),
+                    remediation=(
+                        f"Inspect the upstream repository for '{comp.name}' to confirm redistribution rights "
+                        "and record its SPDX identifier."
+                    ),
+                )
+            )
+
+        # 7. Missing verbatim licence text check for non-public-domain components
+        if (
+            not lic.license_texts
+            and lic.risk_category not in (LicenseRiskCategory.PUBLIC_DOMAIN, LicenseRiskCategory.UNKNOWN)
+        ):
+            findings.append(
+                ComplianceFinding(
+                    rule_id="LIC-MISSING-TEXT",
+                    component_name=comp.name,
+                    component_version=comp.version,
+                    license_spdx=spdx_id,
+                    risk_category=lic.risk_category,
+                    severity=Severity.LOW,
+                    title=f"Missing verbatim LICENSE file in package metadata ({comp.name})",
+                    description=(
+                        f"Component '{comp.name}@{comp.version}' declares licence '{spdx_id}', "
+                        "but its .dist-info metadata did not bundle a verbatim LICENSE file."
+                    ),
+                    remediation="Ensure canonical licence text is included in THIRD_PARTY_NOTICES.",
+                )
+            )
+
+    return findings
+
+
+def generate_third_party_notices(report: AuditReport) -> str:
+    """
+    Generate a THIRD_PARTY_NOTICES attribution file suitable for
+    distribution alongside Python or compiled software.
+    """
+    bundled = [c for c in report.components if c.is_bundled]
+    bundled_sorted = sorted(bundled, key=lambda c: (c.name.lower(), c.version))
+
+    lines: list[str] = [
+        "================================================================================",
+        "                          THIRD-PARTY SOFTWARE NOTICES                          ",
+        "================================================================================",
+        "",
+        f"Application: {report.target_name} ({report.target_version})",
+        f"Audit Mode:  {report.mode.value} ({report.layout.value})",
+        "",
+        "This product includes or links to third-party open-source software components.",
+        "Acknowledgements, copyright notices, and licence terms for each component are",
+        "reproduced below in accordance with their respective licence obligations.",
+        "",
+        "--------------------------------------------------------------------------------",
+        "COMPONENT SUMMARY",
+        "--------------------------------------------------------------------------------",
+    ]
+
+    if not bundled_sorted:
+        lines.append("No third-party runtime components detected.")
+    else:
+        for idx, comp in enumerate(bundled_sorted, start=1):
+            lic_str = comp.license_info.spdx_id
+            ctype = "Native Library" if comp.component_type.value == "native-library" else "Python Package"
+            lines.append(f"  {idx:2d}. {comp.name} ({comp.version}) - {lic_str} [{ctype}]")
+
+    lines.append("")
+
+    for comp in bundled_sorted:
+        lic = comp.license_info
+        lines.extend(
+            [
+                "================================================================================",
+                f"Component: {comp.name}",
+                f"Version:   {comp.version}",
+                f"Type:      {comp.component_type.value}",
+                f"PURL:      {comp.purl}",
+                f"License:   {lic.spdx_id}",
+            ]
+        )
+        if comp.homepage:
+            lines.append(f"Homepage:  {comp.homepage}")
+        if lic.is_dual_licensed and lic.license_choices:
+            lines.append(
+                f"Note:      Dual-licensed ({' OR '.join(lic.license_choices)}); "
+                f"redistributed under the least restrictive applicable terms."
+            )
+        lines.append("--------------------------------------------------------------------------------")
+        lines.append("")
+
+        # Copyright notices
+        if lic.copyright_notices:
+            lines.append("Copyright Notices:")
+            lines.extend(f"  {notice}" for notice in lic.copyright_notices)
+            lines.append("")
+        elif comp.author:
+            lines.append("Copyright Notices:")
+            lines.append(f"  Copyright (c) {comp.author}")
+            lines.append("")
+
+        # Verbatim NOTICE / AUTHORS texts (mandatory for Apache-2.0 Section 4(d))
+        if lic.notice_texts:
+            for notice_filename, notice_body in sorted(lic.notice_texts.items()):
+                lines.append(f"--- Begin {notice_filename} ---")
+                lines.append(notice_body.strip())
+                lines.append(f"--- End {notice_filename} ---")
+                lines.append("")
+
+        # Verbatim LICENSE texts or canonical fallback
+        if lic.license_texts:
+            for lic_filename, lic_body in sorted(lic.license_texts.items()):
+                lines.append(f"--- Begin {lic_filename} ---")
+                lines.append(lic_body.strip())
+                lines.append(f"--- End {lic_filename} ---")
+                lines.append("")
+        else:
+            primary_choice = lic.license_choices[0] if lic.license_choices else lic.spdx_id
+            fallback_text = CANONICAL_LICENSE_FALLBACKS.get(primary_choice) or CANONICAL_LICENSE_FALLBACKS.get(lic.spdx_id)
+            if fallback_text:
+                lines.append(f"--- Standard {primary_choice} License Notice ---")
+                lines.append(fallback_text)
+                lines.append(f"--- End Standard {primary_choice} License Notice ---")
+                lines.append("")
+            else:
+                lines.append(f"Declared License: {lic.declared_raw} ({lic.spdx_id})")
+                lines.append("")
+
+    lines.append("================================================================================")
+    lines.append("End of Third-Party Software Notices")
+    lines.append("================================================================================")
+    return "\n".join(lines) + "\n"
+
+
+def write_third_party_notices(report: AuditReport, output_path: Path) -> Path:
+    """Write the generated THIRD_PARTY_NOTICES content to disk."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    content = generate_third_party_notices(report)
+    output_path.write_text(content, encoding="utf-8")
+    return output_path
