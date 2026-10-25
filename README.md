@@ -1,6 +1,6 @@
-# Argus
+# Rhada
 
-Argus is a compliance, Software Bill of Materials (SBOM), binary linkage, and security vulnerability auditor for Python source workspaces and compiled Linux distributions (Nuitka and PyInstaller).
+Rhada is a compliance, Software Bill of Materials (SBOM), binary linkage, and security vulnerability auditor for Python source workspaces and compiled Linux distributions (Nuitka and PyInstaller).
 
 ## Overview
 
@@ -37,7 +37,7 @@ Manage and install with [`uv`](https://docs.astral.sh/uv/):
 uv sync
 
 # Run via uv
-uv run argus --help
+uv run rhada --help
 ```
 
 ## CLI Usage
@@ -45,7 +45,7 @@ uv run argus --help
 ### 1. Audit a Python / `uv` Source Workspace
 
 ```bash
-uv run argus --project . \
+uv run rhada --project . \
   --sbom sbom.cdx.json \
   --notices THIRD_PARTY_NOTICES
 ```
@@ -54,14 +54,14 @@ uv run argus --project . \
 
 ```bash
 # Standalone directory (Nuitka .dist or PyInstaller folder)
-uv run argus --project . --dist ./build/app.dist \
+uv run rhada --project . --dist ./build/app.dist \
   --sbom dist-sbom.json \
   --sbom-format cyclonedx \
   --notices dist/THIRD_PARTY_NOTICES \
   --fail-on-linkage
 
 # Monolithic single-file binary (PyInstaller onefile or Nuitka onefile)
-uv run argus --project . --dist ./dist/app-linux-x86_64 \
+uv run rhada --project . --dist ./dist/app-linux-x86_64 \
   --sbom dist-sbom.spdx.json \
   --sbom-format spdx \
   --notices dist/THIRD_PARTY_NOTICES
@@ -71,13 +71,13 @@ uv run argus --project . --dist ./dist/app-linux-x86_64 \
 
 ```bash
 # Generate SBOM to stdout or file
-uv run argus sbom --project . --format spdx --output sbom.spdx.json
+uv run rhada sbom --project . --format spdx --output sbom.spdx.json
 
 # Generate THIRD_PARTY_NOTICES
-uv run argus notices --project . --dist ./build/app.dist --output THIRD_PARTY_NOTICES
+uv run rhada notices --project . --dist ./build/app.dist --output THIRD_PARTY_NOTICES
 
 # Inspect ELF binaries and DT_NEEDED linkage directly
-uv run argus inspect-elf ./build/app.dist
+uv run rhada inspect-elf ./build/app.dist
 ```
 
 ## Exit Codes
@@ -100,14 +100,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
-      - name: Run Argus Audit and Generate Release Artefacts
+      - name: Run Rhada Audit and Generate Release Artefacts
         run: |
-          uv run argus audit \
+          uv run rhada audit \
             --project . \
             --dist ./dist/my-service.dist \
             --sbom ./dist/sbom.cdx.json \
             --notices ./dist/THIRD_PARTY_NOTICES \
-            --report-json ./dist/argus-report.json \
+            --report-json ./dist/rhada-report.json \
             --fail-on-severity high \
             --fail-on-licence high \
             --fail-on-linkage

@@ -3,16 +3,17 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "argus"
-version = "0.1.0"
+name = "rhada"
+version = "0.0.1"
 description = "Legal compliance, SBOM generation, binary linkage verification, and security vulnerability auditor for Python source workspaces and compiled Nuitka/PyInstaller distributions."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-    { name = "Argus DevSecOps Team" }
+    { name = "Rhada DevSecOps Team" }
 ]
 keywords = [
+    "rhada",
     "sbom",
     "compliance",
     "security",
@@ -60,12 +61,12 @@ dependencies = [
 ]
 
 [project.scripts]
-argus = "argus.cli:main"
+rhada = "rhada.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/dcollison/argus"
-Repository = "https://github.com/dcollison/argus"
-Issues = "https://github.com/dcollison/argus/issues"
+Homepage = "https://github.com/dcollison/rhada"
+Repository = "https://github.com/dcollison/rhada"
+Issues = "https://github.com/dcollison/rhada/issues"
 
 [dependency-groups]
 dev = [
@@ -75,7 +76,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/argus"]
+packages = ["src/rhada"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -83,7 +84,7 @@ pythonpath = ["src", "."]
 addopts = "-q"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
