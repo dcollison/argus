@@ -897,13 +897,14 @@ def verify_binary_linkage(
                 else:
                     report.binary_origins.setdefault(needed_name, iss_prov)
 
+                resolved_target_name = Path(resolved.replace("\\", "/")).name
                 report.linkage_issues.append(
                     LinkageIssue(
                         binary_path=b.path,
                         needed_lib=needed_name,
                         status=LinkageStatus.BUNDLED,
                         severity=Severity.NONE,
-                        message=f"Resolved within distribution at {Path(resolved.replace('\\', '/')).name}",
+                        message=f"Resolved within distribution at {resolved_target_name}",
                         resolved_path=resolved,
                         origin_package=iss_orig,
                         provenance=iss_prov,
@@ -959,6 +960,7 @@ def verify_binary_linkage(
                     seen_unresolved_lower.add(n_lower)
                     seen_unresolved.add(needed_name)
                     report.unresolved_dependencies.append(needed_name)
+                binary_target_name = Path(b.path.replace("\\", "/")).name
                 report.linkage_issues.append(
                     LinkageIssue(
                         binary_path=b.path,
@@ -967,7 +969,7 @@ def verify_binary_linkage(
                         severity=Severity.HIGH,
                         message=(
                             f"Unbundled external shared library '{needed_name}' required by "
-                            f"'{Path(b.path.replace('\\', '/')).name}' is missing from distribution."
+                            f"'{binary_target_name}' is missing from distribution."
                         ),
                         origin_package=None,
                         provenance="missing-external",
