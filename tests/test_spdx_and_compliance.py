@@ -280,3 +280,76 @@ def test_legal_disclaimer_coverage() -> None:
     text_report = format_report_text(report)
     assert "Rhada is an automated analysis tool, not a provider of legal advice" in text_report
 
+
+def test_corporate_internal_license_detection_and_allowlist() -> None:
+    from rhada.spdx import infer_spdx_from_license_text, normalize_single_license
+
+    # 1. Text inference & raw normalisation
+    assert normalize_single_license("Acme Corp Internal Licence") == "LicenseRef-Acme-Corp-Internal"
+    assert normalize_single_license("Acme Corp Internal License") == "LicenseRef-Acme-Corp-Internal"
+    assert (
+        infer_spdx_from_license_text("Acme Corp Internal Licence. All rights reserved.")
+        == "LicenseRef-Acme-Corp-Internal"
+    )
+
+    lic = build_license_info(
+        declared_raw="",
+        license_texts={"LICENSE": "Acme Corp Internal Licence. All rights reserved."},
+    )
+    assert lic.spdx_id == "LicenseRef-Acme-Corp-Internal"
+    assert lic.risk_category == LicenseRiskCategory.PROPRIETARY
+
+    comp = Component(
+        name="acme-core-sdk",
+        version="1.2.0",
+        component_type=ComponentType.PYTHON_PACKAGE,
+        license_info=lic,
+        is_bundled=True,
+    )
+
+    # 2. Without allowlist -> flagged as proprietary
+    findings_default = evaluate_compliance(
+        [comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(),
+    )
+    assert len(findings_default) == 1
+    assert findings_default[0].rule_id == "LIC-PROPRIETARY"
+
+    # 3. Allowed via exact SPDX ID
+    findings_spdx = evaluate_compliance(
+        [comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"LicenseRef-Acme-Corp-Internal"}),
+    )
+    assert len(findings_spdx) == 0
+
+    # 4. Allowed via human-readable raw licence title
+    findings_raw = evaluate_compliance(
+        [comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"Acme Corp Internal Licence"}),
+    )
+    assert len(findings_raw) == 0
+
+    # 5. Allowed via general internal or proprietary wildcard
+    findings_internal = evaluate_compliance(
+        [comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"LicenseRef-Internal"}),
+    )
+    assert len(findings_internal) == 0
+
+    findings_prop = evaluate_compliance(
+        [comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"Proprietary"}),
+    )
+    assert len(findings_prop) == 0
+
+

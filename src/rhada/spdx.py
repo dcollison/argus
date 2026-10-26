@@ -898,14 +898,29 @@ def normalize_single_license(raw: str) -> str:
         return "Unlicense"
     if "public domain" in lower:
         return "Public-Domain"
+
+    # Corporate and internal licence patterns (e.g. "Acme Corp Internal Licence")
+    internal_match = re.search(r"\b(?:([A-Za-z0-9_ -]+?)\s+)?internal\s+licen[cs]e\b", cleaned, re.IGNORECASE)
+    if internal_match:
+        prefix = (internal_match.group(1) or "").strip()
+        cleaned_prefix = re.sub(r"^(?:the|an|a|our)\s+", "", prefix, flags=re.IGNORECASE).strip()
+        if cleaned_prefix:
+            slug = "-".join(part for part in re.split(r"[\s_-]+", cleaned_prefix) if part)
+            return f"LicenseRef-{slug}-Internal"
+        return "LicenseRef-Internal"
+
+    if "internal" in lower and ("proprietary" in lower or "confidential" in lower or "rights reserved" in lower):
+        return "LicenseRef-Internal"
+
     if "proprietary" in lower or "commercial" in lower:
         return "LicenseRef-Proprietary"
 
     return "NOASSERTION"
 
 
-def _infer_spdx_from_section(lower: str) -> str:
-    """Infer an SPDX identifier from a lower-cased licence text section."""
+def _infer_spdx_from_section(section: str) -> str:
+    """Infer an SPDX identifier from a licence text section."""
+    lower = section.lower()
     if "apache license" in lower and "version 2.0" in lower:
         return "Apache-2.0"
     if "gnu affero general public license" in lower:
@@ -936,6 +951,24 @@ def _infer_spdx_from_section(lower: str) -> str:
         return "PSF-2.0"
     if "this is free and unencumbered software released into the public domain" in lower:
         return "Unlicense"
+
+    # Corporate and internal licence patterns (e.g. "Acme Corp Internal Licence. All rights reserved.")
+    internal_match = re.search(r"\b(?:([A-Za-z0-9_ -]+?)\s+)?internal\s+licen[cs]e\b", section, re.IGNORECASE)
+    if internal_match:
+        prefix = (internal_match.group(1) or "").strip()
+        cleaned_prefix = re.sub(r"^(?:the|an|a|our)\s+", "", prefix, flags=re.IGNORECASE).strip()
+        if cleaned_prefix:
+            slug = "-".join(part for part in re.split(r"[\s_-]+", cleaned_prefix) if part)
+            return f"LicenseRef-{slug}-Internal"
+        return "LicenseRef-Internal"
+
+    if (
+        ("all rights reserved" in lower and ("internal" in lower or "proprietary" in lower or "confidential" in lower))
+        or "proprietary and confidential" in lower
+        or "for internal use only" in lower
+    ):
+        return "LicenseRef-Proprietary"
+
     return "NOASSERTION"
 
 
@@ -947,14 +980,14 @@ def infer_spdx_from_license_text(text: str) -> str:
     # inspect the primary header section before any ==== or ---- divider first.
     primary_section = re.split(r"\n\s*(?:={4,}|-{4,})\s*\n", text, maxsplit=1)[0]
     if primary_section != text:
-        header_match = _infer_spdx_from_section(primary_section.lower())
+        header_match = _infer_spdx_from_section(primary_section)
         if header_match != "NOASSERTION":
             return header_match
     if len(text) > 1500:
-        header_match = _infer_spdx_from_section(text[:1500].lower())
+        header_match = _infer_spdx_from_section(text[:1500])
         if header_match != "NOASSERTION":
             return header_match
-    return _infer_spdx_from_section(text.lower())
+    return _infer_spdx_from_section(text)
 
 
 def classify_single_spdx(spdx_id: str) -> LicenseRiskCategory:

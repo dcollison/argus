@@ -14,7 +14,7 @@ from rhada.models import (
     LicenseRiskCategory,
     Severity,
 )
-from rhada.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist
+from rhada.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist, normalize_single_license
 
 # Canonical fallback licence summaries when a wheel omits a verbatim LICENSE file
 CANONICAL_LICENSE_FALLBACKS: dict[str, str] = {
@@ -93,7 +93,15 @@ def evaluate_compliance(
     """
     findings: list[ComplianceFinding] = []
     denied_upper = {d.strip().upper() for d in config.denied_licenses if d.strip()}
-    allowed_upper = {a.strip().upper() for a in config.allowed_licenses if a.strip()}
+    allowed_upper: set[str] = set()
+    for a in config.allowed_licenses:
+        clean = a.strip()
+        if not clean:
+            continue
+        allowed_upper.add(clean.upper())
+        norm = normalize_single_license(clean)
+        if norm != "NOASSERTION":
+            allowed_upper.add(norm.upper())
 
     for comp in components:
         if not comp.is_bundled:
@@ -133,6 +141,14 @@ def evaluate_compliance(
             evaluate_spdx_allowlist(spdx_id, allowed_upper)
             or (lic.is_dual_licensed and bool(choices_upper & allowed_upper))
             or (lic.declared_raw and lic.declared_raw.strip().upper() in allowed_upper)
+            or (
+                lic.risk_category == LicenseRiskCategory.PROPRIETARY
+                and bool(allowed_upper & {"PROPRIETARY", "LICENSEREF-PROPRIETARY"})
+            )
+            or (
+                (spdx_id.upper().endswith("-INTERNAL") or spdx_id.upper() == "LICENSEREF-INTERNAL")
+                and bool(allowed_upper & {"INTERNAL", "LICENSEREF-INTERNAL"})
+            )
         )
         is_explicitly_allowed = bool(allowed_upper) and is_permitted
 
