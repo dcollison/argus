@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import configparser
 import contextlib
 import email
 import re
@@ -87,7 +89,7 @@ def _find_site_packages_dirs(project_path: Path) -> list[Path]:
             seen_resolved.add(resolved)
             candidates.append(path)
 
-    venv_names = [".venv", "venv", ".env"]
+    venv_names = [".venv", "venv", ".env", "env"]
     search_roots = [project_path]
     if project_path.parent != project_path:
         search_roots.append(project_path.parent)
@@ -951,13 +953,166 @@ def _parse_uv_lock(uv_lock_path: Path) -> dict[str, Any]:
         return {}
 
 
+def _parse_setup_py(setup_py_path: Path) -> dict[str, Any]:
+    """
+    Safely parse setup.py using Python AST without executing untrusted code.
+    Extracts name, version, description, license, install_requires, and extras_require.
+    """
+    if not setup_py_path.is_file():
+        return {}
+    try:
+        source = _read_text_safe(setup_py_path, max_bytes=1_000_000)
+        tree = ast.parse(source, filename=str(setup_py_path))
+    except (SyntaxError, UnicodeDecodeError, OSError, ValueError):
+        return {}
+
+    constants: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                if isinstance(node.value, ast.Constant):
+                    constants[target.id] = node.value.value
+                elif isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                    items = [
+                        elt.value
+                        for elt in node.value.elts
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                    ]
+                    if items:
+                        constants[target.id] = items
+
+    result: dict[str, Any] = {}
+
+    def _resolve_val(val_node: ast.AST) -> Any:
+        if isinstance(val_node, ast.Constant):
+            return val_node.value
+        if isinstance(val_node, ast.Name) and val_node.id in constants:
+            return constants[val_node.id]
+        if isinstance(val_node, (ast.List, ast.Tuple, ast.Set)):
+            elts = []
+            for elt in val_node.elts:
+                v = _resolve_val(elt)
+                if isinstance(v, str):
+                    elts.append(v)
+            return elts
+        if isinstance(val_node, ast.Dict):
+            d = {}
+            for k, v in zip(val_node.keys, val_node.values, strict=False):
+                k_val = _resolve_val(k) if k else None
+                v_val = _resolve_val(v)
+                if isinstance(k_val, str):
+                    d[k_val] = v_val
+            return d
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func_name = ""
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+            if func_name != "setup":
+                continue
+
+            for kw in node.keywords:
+                if not kw.arg:
+                    continue
+                val = _resolve_val(kw.value)
+                if val is None:
+                    continue
+
+                if kw.arg == "name" and isinstance(val, str):
+                    result["name"] = val
+                elif kw.arg == "version" and isinstance(val, (str, int, float)):
+                    result["version"] = str(val)
+                elif kw.arg == "description" and isinstance(val, str):
+                    result["description"] = val
+                elif kw.arg in ("license", "licence") and isinstance(val, str):
+                    result["license"] = val
+                elif kw.arg == "install_requires" and isinstance(val, list):
+                    result["dependencies"] = [str(x) for x in val if isinstance(x, str)]
+                elif kw.arg == "extras_require" and isinstance(val, dict):
+                    opt: dict[str, list[str]] = {}
+                    for gname, greqs in val.items():
+                        if isinstance(greqs, list):
+                            opt[gname] = [str(x) for x in greqs if isinstance(x, str)]
+                    result["optional-dependencies"] = opt
+                elif kw.arg == "classifiers" and isinstance(val, list):
+                    result["classifiers"] = [str(x) for x in val if isinstance(x, str)]
+
+    return result
+
+
+def _parse_setup_cfg(setup_cfg_path: Path) -> dict[str, Any]:
+    """Read and parse setup.cfg using standard configparser."""
+    if not setup_cfg_path.is_file():
+        return {}
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(setup_cfg_path, encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return {}
+
+    result: dict[str, Any] = {}
+    if cp.has_section("metadata"):
+        for field in ("name", "version", "description", "license", "licence"):
+            if cp.has_option("metadata", field):
+                result[field if field != "licence" else "license"] = cp.get("metadata", field).strip()
+
+    deps: list[str] = []
+    if cp.has_section("options") and cp.has_option("options", "install_requires"):
+        raw_reqs = cp.get("options", "install_requires")
+        for line in raw_reqs.splitlines():
+            cleaned = line.strip()
+            if cleaned and not cleaned.startswith("#"):
+                deps.append(cleaned)
+    if deps:
+        result["dependencies"] = deps
+
+    if cp.has_section("options.extras_require"):
+        opt: dict[str, list[str]] = {}
+        for opt_name, raw_val in cp.items("options.extras_require"):
+            group_reqs = [
+                line.strip()
+                for line in raw_val.splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            if group_reqs:
+                opt[opt_name] = group_reqs
+        if opt:
+            result["optional-dependencies"] = opt
+
+    return result
+
+
+def _parse_requirements_txt(req_path: Path) -> list[str]:
+    """Parse standard requirements.txt file, filtering comments and pip options."""
+    if not req_path.is_file():
+        return []
+    reqs: list[str] = []
+    try:
+        text = _read_text_safe(req_path, max_bytes=1_000_000)
+    except OSError:
+        return []
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#"):
+            continue
+        if cleaned.startswith(("-", "--")):
+            continue
+        reqs.append(cleaned)
+    return reqs
+
+
 def inspect_workspace(project_path: Path, include_dev: bool = False) -> WorkspaceMetadata:
     """
     Inspect a Python project's uv workspace (pyproject.toml, uv.lock, and .venv)
     to build a complete map of runtime and development dependencies, licences, and modules.
     """
     project_path = project_path.resolve()
-    ws = WorkspaceMetadata(root_path=project_path)
+    ws = WorkspaceMetadata(root_path=project_path, project_name=project_path.name)
 
     pyproject_file = project_path / "pyproject.toml"
     uv_lock_file = project_path / "uv.lock"
@@ -967,7 +1122,7 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
     pyproject_data = _parse_pyproject_toml(pyproject_file)
     project_table = pyproject_data.get("project", {})
     has_explicit_project_metadata = isinstance(project_table, dict) and bool(project_table)
-    if isinstance(project_table, dict):
+    if isinstance(project_table, dict) and has_explicit_project_metadata:
         ws.project_name = normalize_pkg_name(project_table.get("name", project_path.name)) or project_path.name
         ws.project_version = str(project_table.get("version", "0.0.1"))
         ws.project_description = str(project_table.get("description", ""))
@@ -992,6 +1147,55 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                             dep_name = parse_req_name(req_str)
                             if dep_name and group_name.lower() in {"dev", "test", "testing", "lint", "build", "docs"}:
                                 ws.direct_dev_deps.add(dep_name)
+    else:
+        # Fall back to legacy setup.cfg and setup.py
+        setup_cfg_data = _parse_setup_cfg(project_path / "setup.cfg")
+        setup_py_data = _parse_setup_py(project_path / "setup.py")
+        legacy_data = {**setup_py_data, **setup_cfg_data}
+
+        if legacy_data:
+            has_explicit_project_metadata = True
+            if "name" in legacy_data:
+                ws.project_name = normalize_pkg_name(legacy_data["name"]) or legacy_data["name"]
+            if "version" in legacy_data:
+                ws.project_version = str(legacy_data["version"])
+            if "description" in legacy_data:
+                ws.project_description = str(legacy_data["description"])
+            if "license" in legacy_data:
+                ws.project_license = str(legacy_data["license"])
+
+            for req_str in legacy_data.get("dependencies", []):
+                dep_name = parse_req_name(req_str)
+                if dep_name:
+                    ws.direct_runtime_deps.add(dep_name)
+
+            for group_name, group_reqs in legacy_data.get("optional-dependencies", {}).items():
+                for req_str in group_reqs:
+                    dep_name = parse_req_name(req_str)
+                    if dep_name and group_name.lower() in {"dev", "test", "testing", "lint", "build", "docs"}:
+                        ws.direct_dev_deps.add(dep_name)
+
+    # Check requirements.txt if direct_runtime_deps is still empty
+    if not ws.direct_runtime_deps:
+        for cand_req in ("requirements.txt", "requirements/prod.txt", "requirements/main.txt"):
+            cand_path = project_path / cand_req
+            if cand_path.is_file():
+                for req_str in _parse_requirements_txt(cand_path):
+                    dep_name = parse_req_name(req_str)
+                    if dep_name:
+                        ws.direct_runtime_deps.add(dep_name)
+                break
+
+    # Check requirements-dev.txt if direct_dev_deps is still empty
+    if not ws.direct_dev_deps:
+        for cand_dev in ("requirements-dev.txt", "dev-requirements.txt", "requirements/dev.txt"):
+            cand_path = project_path / cand_dev
+            if cand_path.is_file():
+                for req_str in _parse_requirements_txt(cand_path):
+                    dep_name = parse_req_name(req_str)
+                    if dep_name:
+                        ws.direct_dev_deps.add(dep_name)
+                break
 
     # PEP 735 dependency-groups and tool.uv.dev-dependencies
     dep_groups = pyproject_data.get("dependency-groups", {})

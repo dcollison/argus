@@ -5,7 +5,7 @@ Rhada is a compliance, Software Bill of Materials (SBOM), binary linkage, and se
 ## Overview
 
 1. **Dual-Mode Operation**
-   - **Source Mode (default when `--dist` is omitted):** Inspects a `uv` workspace (`pyproject.toml`, `uv.lock`, and `.venv/lib/.../site-packages/*.dist-info`) to separate transitive runtime dependencies from development and build dependencies, extract SPDX licence metadata, and check for security advisories.
+   - **Source Mode (default when `--dist` is omitted):** Inspects Python source workspaces. Supports modern PEP 621 / `uv` projects (`pyproject.toml`, `uv.lock`) as well as legacy `setuptools` and pip workspaces (`setup.py`, `setup.cfg`, `requirements.txt`). `setup.py` is safely inspected using static Abstract Syntax Tree (AST) parsing without executing untrusted code. Discovers installed package metadata across virtual environments (`.venv`, `venv`, `env`) to separate direct runtime dependencies from development/build tools, extract SPDX licence metadata, and check for security advisories.
    - **Compiled Distribution Mode (`--dist <path>`):** Audits Nuitka and PyInstaller artefacts, including standalone directories (`app.dist/`, `dist/app/`) and monolithic single-file binaries (`app.bin`). Identifies bundled Python modules (excluding build and test tools such as `pytest`, `ruff`, `mypy`, `nuitka`, and `pyinstaller`), inspects bundled native shared libraries (`.so`), and verifies ELF dynamic linkage.
 
 2. **Legal and Licence Compliance**

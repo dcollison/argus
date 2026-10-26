@@ -287,3 +287,89 @@ def test_pip_audit_service_integration() -> None:
     assert nat_comp.vulnerabilities[0].severity == Severity.HIGH
 
 
+def test_inspect_legacy_setup_py_workspace(tmp_path: Path) -> None:
+    setup_py = tmp_path / "setup.py"
+    setup_py.write_text(
+        """
+from setuptools import setup, find_packages
+
+VERSION = "1.5.0"
+
+setup(
+    name="legacy-app",
+    version=VERSION,
+    description="A legacy setuptools project",
+    license="MIT",
+    install_requires=[
+        "click>=8.0.0",
+    ],
+    extras_require={
+        "dev": ["pytest>=8.0.0"],
+    },
+)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    sp = tmp_path / ".venv" / "Lib" / "site-packages"
+    create_dist_info(
+        sp,
+        "click",
+        "8.1.7",
+        license_str="BSD-3-Clause",
+        top_level=["click"],
+    )
+    create_dist_info(
+        sp,
+        "pytest",
+        "8.2.0",
+        license_str="MIT",
+        top_level=["pytest"],
+    )
+
+    ws = inspect_workspace(tmp_path)
+    assert ws.project_name == "legacy-app"
+    assert ws.project_version == "1.5.0"
+    assert ws.project_license == "MIT"
+    assert "click" in ws.direct_runtime_deps
+    assert "pytest" in ws.direct_dev_deps
+
+    # click should be runtime/bundled, pytest excluded by default
+    assert ws.components["click"].is_bundled is True
+    assert ws.components["click"].scope == ComponentScope.REQUIRED
+    assert ws.components["pytest"].is_bundled is False
+    assert ws.components["pytest"].scope == ComponentScope.DEV_EXCLUDED
+
+
+def test_inspect_legacy_setup_cfg_and_requirements(tmp_path: Path) -> None:
+    setup_cfg = tmp_path / "setup.cfg"
+    setup_cfg.write_text(
+        """
+[metadata]
+name = cfg-app
+version = 2.4.1
+description = Setup cfg project
+license = Apache-2.0
+
+[options]
+install_requires =
+    requests>=2.28.0
+
+[options.extras_require]
+test =
+    pytest>=8.0
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+
+    ws = inspect_workspace(tmp_path)
+    assert ws.project_name == "cfg-app"
+    assert ws.project_version == "2.4.1"
+    assert ws.project_license == "Apache-2.0"
+    assert "requests" in ws.direct_runtime_deps
+    assert "pytest" in ws.direct_dev_deps
+
+
+
