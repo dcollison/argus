@@ -255,23 +255,14 @@ def test_company_internal_license_suppresses_violations() -> None:
     )
     assert any(f.rule_id == "LIC-PROPRIETARY" for f in findings_default)
 
-    # 2. Approved via company_licenses -> No violations
-    findings_company = evaluate_compliance(
-        [corp_comp],
-        mode=AuditMode.SOURCE,
-        layout=DistributionLayout.SOURCE_WORKSPACE,
-        config=AuditConfig(company_licenses={"LicenseRef-Acme-Proprietary"}),
-    )
-    assert not any(f.rule_id in ("LIC-PROPRIETARY", "LIC-POLICY-NOT-ALLOWED", "LIC-UNKNOWN") for f in findings_company)
-
-    # 3. Approved via allowed_licenses -> No violations
+    # 2. Approved via allowed_licenses -> No violations
     findings_allowed = evaluate_compliance(
         [corp_comp],
         mode=AuditMode.SOURCE,
         layout=DistributionLayout.SOURCE_WORKSPACE,
         config=AuditConfig(allowed_licenses={"LicenseRef-Acme-Proprietary"}),
     )
-    assert not any(f.rule_id in ("LIC-PROPRIETARY", "LIC-UNKNOWN") for f in findings_allowed)
+    assert not any(f.rule_id in ("LIC-PROPRIETARY", "LIC-POLICY-NOT-ALLOWED", "LIC-UNKNOWN") for f in findings_allowed)
 
 
 def test_legal_disclaimer_coverage() -> None:

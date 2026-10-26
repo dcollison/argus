@@ -427,7 +427,6 @@ class AuditConfig:
     allow_unknown_license: bool = False
     allowed_licenses: set[str] = field(default_factory=set)
     denied_licenses: set[str] = field(default_factory=set)
-    company_licenses: set[str] = field(default_factory=set)
     sbom_output: Path | None = None
     sbom_format: str = "cyclonedx"
     notices_output: Path | None = None

@@ -292,7 +292,7 @@ def test_cli_version_and_help_and_unicode_notices(tmp_path: Path) -> None:
 
     res_audit_help = runner.invoke(cli, ["audit", "--help"])
     assert res_audit_help.exit_code == 0
-    assert "--company-license" in res_audit_help.output
+    assert "--allow-licence" in res_audit_help.output
 
     # Test Unicode notices output to stdout without charmap/cp1252 crashing
     ws = tmp_path / "unicode_pkg"
@@ -319,5 +319,9 @@ dependencies = ["unicode-pkg>=1.0.0"]
     res_notices = runner.invoke(cli, ["notices", "--project", str(ws)])
     assert res_notices.exit_code == 0
     assert "Michał Wędrowny" in res_notices.output or "\u0144" in res_notices.output
+
+    # Test invoking audit with plural --allow-licences alias
+    res_alias = runner.invoke(cli, ["audit", "--project", str(ws), "--offline", "--allow-licences", "MIT,Apache-2.0"])
+    assert res_alias.exit_code == 0
 
 

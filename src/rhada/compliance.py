@@ -94,7 +94,6 @@ def evaluate_compliance(
     findings: list[ComplianceFinding] = []
     denied_upper = {d.strip().upper() for d in config.denied_licenses if d.strip()}
     allowed_upper = {a.strip().upper() for a in config.allowed_licenses if a.strip()}
-    company_upper = {c.strip().upper() for c in config.company_licenses if c.strip()}
 
     for comp in components:
         if not comp.is_bundled:
@@ -104,14 +103,6 @@ def evaluate_compliance(
         spdx_id = lic.spdx_id or "NOASSERTION"
         choices = lic.license_choices or [spdx_id]
         choices_upper = {c.upper() for c in choices}
-
-        # Check if licence is an approved company internal licence
-        is_company_license = bool(company_upper) and (
-            spdx_id.upper() in company_upper
-            or bool(choices_upper & company_upper)
-            or evaluate_spdx_allowlist(spdx_id, company_upper)
-            or (lic.declared_raw and lic.declared_raw.strip().upper() in company_upper)
-        )
 
         # 1. Explicit Denied Licence Policy Check
         is_denied = denied_upper and (
@@ -146,7 +137,7 @@ def evaluate_compliance(
         is_explicitly_allowed = bool(allowed_upper) and is_permitted
 
         # 2. Explicit Allowed Licence Policy Check
-        if allowed_upper and not is_permitted and not is_company_license:
+        if allowed_upper and not is_permitted:
             findings.append(
                 ComplianceFinding(
                     rule_id="LIC-POLICY-NOT-ALLOWED",
@@ -294,7 +285,7 @@ def evaluate_compliance(
 
         # 5. Proprietary / Commercial Licence
         elif lic.risk_category == LicenseRiskCategory.PROPRIETARY:
-            if not is_company_license and not is_explicitly_allowed:
+            if not is_explicitly_allowed:
                 findings.append(
                     ComplianceFinding(
                         rule_id="LIC-PROPRIETARY",
@@ -310,14 +301,14 @@ def evaluate_compliance(
                         ),
                         remediation=(
                             f"Verify that your organisation holds a valid redistribution licence for '{comp.name}', "
-                            "or add it to --company-license / --allow-license if this is an internal or approved licence."
+                            "or approve it via --allow-licence if this is an internal or approved commercial licence."
                         ),
                     )
                 )
 
         # 6. Unknown / Unasserted Licence
         elif lic.risk_category == LicenseRiskCategory.UNKNOWN:
-            if not is_company_license and not is_explicitly_allowed:
+            if not is_explicitly_allowed:
                 sev = Severity.LOW if config.allow_unknown_license else Severity.MEDIUM
                 findings.append(
                     ComplianceFinding(
@@ -334,14 +325,14 @@ def evaluate_compliance(
                         ),
                         remediation=(
                             f"Inspect the upstream repository for '{comp.name}' to confirm redistribution rights "
-                            "and record its SPDX identifier, or add it to --allow-license / --company-license."
+                            "and record its SPDX identifier, or approve it via --allow-licence."
                         ),
                     )
                 )
 
         # 7. Missing verbatim licence text check for non-public-domain components
         if (
-            not is_company_license
+            not is_explicitly_allowed
             and not lic.license_texts
             and lic.risk_category not in (LicenseRiskCategory.PUBLIC_DOMAIN, LicenseRiskCategory.UNKNOWN)
         ):

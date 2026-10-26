@@ -67,19 +67,18 @@ uv run rhada --project . --dist ./dist/app-linux-x86_64 \
   --notices dist/THIRD_PARTY_NOTICES
 ```
 
-### 3. Policy Controls and Company Internal Licences
+### 3. Policy Controls and Approved Licences
 
-If your organisation maintains proprietary in-house packages or approved commercial licences, you can prevent them from being flagged as policy violations using `--company-license` or `--allow-license`:
+If your organisation maintains proprietary in-house packages or approved commercial licences, you can permit them using `--allow-licence` (or `--allow-licences` / `--allow-license`):
 
 ```bash
-# Whitelist internal company licences and approved commercial packages
+# Approve standard open-source licences alongside internal company or proprietary licences
 uv run rhada --project . \
-  --company-license "LicenseRef-Acme-Proprietary,Proprietary" \
-  --allow-license "MIT,Apache-2.0,BSD-3-Clause"
+  --allow-licence "MIT,Apache-2.0,BSD-3-Clause,LicenseRef-AcmeCorp,Proprietary"
 ```
 
-- Any component declaring a `--company-license` is recognised as authorised internal software and will not trigger `LIC-PROPRIETARY`, `LIC-UNKNOWN`, or `LIC-POLICY-NOT-ALLOWED`.
-- Standard custom SPDX identifiers using the `LicenseRef-[A-Za-z0-9.-]+` convention are supported throughout all audit checks, SBOMs, and notice generators.
+- Any component declaring an approved licence will **not** trigger `LIC-POLICY-NOT-ALLOWED`, `LIC-PROPRIETARY`, or `LIC-UNKNOWN`.
+- Custom SPDX identifiers using the `LicenseRef-[A-Za-z0-9.-]+` convention are supported throughout all audit checks, SBOMs, and notice generators.
 
 ### 4. LGPL Source Code Links and Compliance Offers
 

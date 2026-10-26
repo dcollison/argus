@@ -222,25 +222,21 @@ def audit_cmd(
     allowed_licenses: Annotated[
         list[str] | None,
         typer.Option(
-            "--allow-license",
             "--allow-licence",
-            help="Approved SPDX licence IDs (repeatable or comma-separated).",
+            "--allow-license",
+            "--allow-licences",
+            "--allow-licenses",
+            help="Approved SPDX licence IDs or internal company licences (repeatable or comma-separated).",
         ),
     ] = None,
     denied_licenses: Annotated[
         list[str] | None,
         typer.Option(
-            "--deny-license",
             "--deny-licence",
+            "--deny-license",
+            "--deny-licences",
+            "--deny-licenses",
             help="Forbidden SPDX licence IDs (repeatable or comma-separated).",
-        ),
-    ] = None,
-    company_licenses: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--company-license",
-            "--company-licence",
-            help="Approved company internal or proprietary licence IDs (repeatable or comma-separated).",
         ),
     ] = None,
 ) -> None:
@@ -264,7 +260,6 @@ def audit_cmd(
         allow_unknown_license=allow_unknown_license,
         allowed_licenses=_split_csv_values(allowed_licenses),
         denied_licenses=_split_csv_values(denied_licenses),
-        company_licenses=_split_csv_values(company_licenses),
         sbom_output=sbom_output,
         sbom_format=sbom_format.value,
         notices_output=notices_output,
