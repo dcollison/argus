@@ -232,6 +232,7 @@ class NativeLibraryProfile(NamedTuple):
     homepage: str
     copyright_notice: str
     license_text: str
+    source_url: str = ""
 
 
 KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
@@ -332,6 +333,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://gcc.gnu.org/",
         copyright_notice="Copyright (C) Free Software Foundation, Inc.",
         license_text="The GNU Quad-Precision Math Library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.",
+        source_url="https://github.com/gcc-mirror/gcc/tree/master/libquadmath",
     ),
     "libgomp": NativeLibraryProfile(
         canonical_name="libgomp",
@@ -416,6 +418,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://people.engr.tamu.edu/davis/suitesparse.html",
         copyright_notice="Copyright (c) 2005-2024, University of Florida, Timothy A. Davis, and William W. Hager.",
         license_text="CHOLMOD is licensed under the GNU Lesser General Public License v2.1 or later.",
+        source_url="https://github.com/DrTimothyAldenDavis/SuiteSparse/tree/master/CHOLMOD",
     ),
     "libsuitesparseconfig": NativeLibraryProfile(
         canonical_name="suitesparse",
@@ -521,6 +524,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://gmplib.org/",
         copyright_notice="Copyright 1991-2023 Free Software Foundation, Inc.",
         license_text="The GNU Multiple Precision Arithmetic Library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.",
+        source_url="https://gmplib.org/#DOWNLOAD",
     ),
     "libreadline": NativeLibraryProfile(
         canonical_name="readline",
@@ -682,6 +686,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://libgeos.org/",
         copyright_notice="Copyright (C) 2006 Refractions Research Inc.",
         license_text="GEOS is licensed under the GNU Lesser General Public License Version 2.1.",
+        source_url="https://github.com/libgeos/geos",
     ),
     "libgeos_c": NativeLibraryProfile(
         canonical_name="geos",
@@ -689,6 +694,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://libgeos.org/",
         copyright_notice="Copyright (C) 2006 Refractions Research Inc.",
         license_text="GEOS is licensed under the GNU Lesser General Public License Version 2.1.",
+        source_url="https://github.com/libgeos/geos",
     ),
 }
 
@@ -813,6 +819,10 @@ def normalize_single_license(raw: str) -> str:
         return "NOASSERTION"
 
     lower = cleaned.lower()
+    if lower.startswith("licenseref-"):
+        suffix = cleaned.split("-", 1)[1] if "-" in cleaned else cleaned[11:]
+        return f"LicenseRef-{suffix}"
+
     if lower in RAW_TO_SPDX:
         return RAW_TO_SPDX[lower]
 
@@ -971,6 +981,10 @@ def classify_single_spdx(spdx_id: str) -> LicenseRiskCategory:
         spdx_id == "LicenseRef-Proprietary"
         or "proprietary" in spdx_id.lower()
         or "intel" in spdx_id.lower()
+        or "commercial" in spdx_id.lower()
+        or "internal" in spdx_id.lower()
+        or "corporate" in spdx_id.lower()
+        or spdx_id.startswith("LicenseRef-")
     ):
         return LicenseRiskCategory.PROPRIETARY
     return LicenseRiskCategory.UNKNOWN

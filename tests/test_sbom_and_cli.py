@@ -288,6 +288,11 @@ def test_cli_version_and_help_and_unicode_notices(tmp_path: Path) -> None:
     res_help = runner.invoke(cli, ["--help"])
     assert res_help.exit_code == 0
     assert "Rhada: Legal compliance" in res_help.output
+    assert "Disclaimer:" in res_help.output
+
+    res_audit_help = runner.invoke(cli, ["audit", "--help"])
+    assert res_audit_help.exit_code == 0
+    assert "--company-license" in res_audit_help.output
 
     # Test Unicode notices output to stdout without charmap/cp1252 crashing
     ws = tmp_path / "unicode_pkg"

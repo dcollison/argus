@@ -94,6 +94,7 @@ def evaluate_compliance(
     findings: list[ComplianceFinding] = []
     denied_upper = {d.strip().upper() for d in config.denied_licenses if d.strip()}
     allowed_upper = {a.strip().upper() for a in config.allowed_licenses if a.strip()}
+    company_upper = {c.strip().upper() for c in config.company_licenses if c.strip()}
 
     for comp in components:
         if not comp.is_bundled:
@@ -103,6 +104,14 @@ def evaluate_compliance(
         spdx_id = lic.spdx_id or "NOASSERTION"
         choices = lic.license_choices or [spdx_id]
         choices_upper = {c.upper() for c in choices}
+
+        # Check if licence is an approved company internal licence
+        is_company_license = bool(company_upper) and (
+            spdx_id.upper() in company_upper
+            or bool(choices_upper & company_upper)
+            or evaluate_spdx_allowlist(spdx_id, company_upper)
+            or (lic.declared_raw and lic.declared_raw.strip().upper() in company_upper)
+        )
 
         # 1. Explicit Denied Licence Policy Check
         is_denied = denied_upper and (
@@ -128,29 +137,32 @@ def evaluate_compliance(
             )
             continue
 
-        # 2. Explicit Allowed Licence Policy Check
-        if allowed_upper:
-            is_permitted = evaluate_spdx_allowlist(spdx_id, allowed_upper) or (
-                lic.is_dual_licensed and bool(choices_upper & allowed_upper)
-            )
+        # Check if licence is permitted by explicit allow-list
+        is_permitted = not allowed_upper or (
+            evaluate_spdx_allowlist(spdx_id, allowed_upper)
+            or (lic.is_dual_licensed and bool(choices_upper & allowed_upper))
+            or (lic.declared_raw and lic.declared_raw.strip().upper() in allowed_upper)
+        )
+        is_explicitly_allowed = bool(allowed_upper) and is_permitted
 
-            if not is_permitted:
-                findings.append(
-                    ComplianceFinding(
-                        rule_id="LIC-POLICY-NOT-ALLOWED",
-                        component_name=comp.name,
-                        component_version=comp.version,
-                        license_spdx=spdx_id,
-                        risk_category=lic.risk_category,
-                        severity=Severity.HIGH,
-                        title=f"Licence '{spdx_id}' not in policy allow-list",
-                        description=(
-                            f"Component '{comp.name}@{comp.version}' declares licence '{spdx_id}', "
-                            f"which is not among the approved licences ({', '.join(sorted(config.allowed_licenses))})."
-                        ),
-                        remediation=f"Request legal exception for '{spdx_id}' or replace '{comp.name}'.",
-                    )
+        # 2. Explicit Allowed Licence Policy Check
+        if allowed_upper and not is_permitted and not is_company_license:
+            findings.append(
+                ComplianceFinding(
+                    rule_id="LIC-POLICY-NOT-ALLOWED",
+                    component_name=comp.name,
+                    component_version=comp.version,
+                    license_spdx=spdx_id,
+                    risk_category=lic.risk_category,
+                    severity=Severity.HIGH,
+                    title=f"Licence '{spdx_id}' not in policy allow-list",
+                    description=(
+                        f"Component '{comp.name}@{comp.version}' declares licence '{spdx_id}', "
+                        f"which is not among the approved licences ({', '.join(sorted(config.allowed_licenses))})."
+                    ),
+                    remediation=f"Request legal exception for '{spdx_id}' or replace '{comp.name}'.",
                 )
+            )
 
         # 3. Strong Copyleft (GPL / AGPL / SSPL)
         if lic.risk_category == LicenseRiskCategory.STRONG_COPYLEFT:
@@ -202,7 +214,12 @@ def evaluate_compliance(
 
         # 4. Weak Copyleft (LGPL / MPL / EPL / CDDL)
         elif lic.risk_category == LicenseRiskCategory.WEAK_COPYLEFT:
-            is_lgpl = "LGPL" in spdx_id.upper()
+            is_lgpl = "LGPL" in spdx_id.upper() or any("LGPL" in c.upper() for c in choices)
+            effective_src = comp.source_url or comp.homepage or (
+                f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
+                if comp.version and comp.version != "unknown"
+                else f"https://pypi.org/project/{comp.name}/"
+            )
             is_opaque_bundle = (
                 layout == DistributionLayout.MONOLITHIC_BINARY
                 or comp.is_statically_compiled
@@ -222,12 +239,14 @@ def evaluate_compliance(
                             f"Component '{comp.name}@{comp.version}' ({spdx_id}) is bundled inside an opaque "
                             f"monolithic executable or statically compiled C module ({layout.value}). "
                             "LGPL Section 4(d) / Section 6 requires that recipients be able to modify the "
-                            "LGPL library and relink or replace it in the executable."
+                            "LGPL library and relink or replace it in the executable, and access complete corresponding "
+                            f"source code (Source Code: {effective_src})."
                         ),
                         remediation=(
                             "Switch from a monolithic onefile build to a standalone directory build where "
-                            f"'{comp.name}' remains a dynamically loaded shared library (.so) or separate "
-                            "Python module, or provide relinkable object files alongside the binary."
+                            f"'{comp.name}' remains a dynamically loaded shared library (.so / .dll) or separate "
+                            "Python module, provide relinkable object files alongside the binary, and provide "
+                            f"source code access via: {effective_src}"
                         ),
                     )
                 )
@@ -245,11 +264,12 @@ def evaluate_compliance(
                         description=(
                             f"Component '{comp.name}@{comp.version}' is licensed under '{spdx_id}'. "
                             "Commercial redistribution is permitted provided the library remains dynamically "
-                            "replaceable and full LGPL licence text and copyright notices are included."
+                            "replaceable, full LGPL licence text and copyright notices are included, and complete "
+                            f"corresponding source code is made available (Source Code: {effective_src})."
                         ),
                         remediation=(
-                            f"Include THIRD_PARTY_NOTICES with full '{spdx_id}' text and keep '{comp.name}' "
-                            "as a dynamically linked .so or replaceable module."
+                            f"Include THIRD_PARTY_NOTICES with full '{spdx_id}' text, keep '{comp.name}' "
+                            f"as a dynamically linked library or replaceable module, and provide source code access via: {effective_src}"
                         ),
                     )
                 )
@@ -274,49 +294,55 @@ def evaluate_compliance(
 
         # 5. Proprietary / Commercial Licence
         elif lic.risk_category == LicenseRiskCategory.PROPRIETARY:
-            findings.append(
-                ComplianceFinding(
-                    rule_id="LIC-PROPRIETARY",
-                    component_name=comp.name,
-                    component_version=comp.version,
-                    license_spdx=spdx_id,
-                    risk_category=lic.risk_category,
-                    severity=Severity.HIGH,
-                    title=f"Proprietary or commercial licence detected ({spdx_id})",
-                    description=(
-                        f"Component '{comp.name}@{comp.version}' declares a proprietary or non-OSI "
-                        f"commercial licence ('{lic.declared_raw}')."
-                    ),
-                    remediation=f"Verify that your organisation holds a valid redistribution licence for '{comp.name}'.",
+            if not is_company_license and not is_explicitly_allowed:
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-PROPRIETARY",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=Severity.HIGH,
+                        title=f"Proprietary or commercial licence detected ({spdx_id})",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' declares a proprietary or non-OSI "
+                            f"commercial licence ('{lic.declared_raw}')."
+                        ),
+                        remediation=(
+                            f"Verify that your organisation holds a valid redistribution licence for '{comp.name}', "
+                            "or add it to --company-license / --allow-license if this is an internal or approved licence."
+                        ),
+                    )
                 )
-            )
 
         # 6. Unknown / Unasserted Licence
         elif lic.risk_category == LicenseRiskCategory.UNKNOWN:
-            sev = Severity.LOW if config.allow_unknown_license else Severity.MEDIUM
-            findings.append(
-                ComplianceFinding(
-                    rule_id="LIC-UNKNOWN",
-                    component_name=comp.name,
-                    component_version=comp.version,
-                    license_spdx=spdx_id,
-                    risk_category=lic.risk_category,
-                    severity=sev,
-                    title=f"Undeclared or unrecognised licence for '{comp.name}'",
-                    description=(
-                        f"Component '{comp.name}@{comp.version}' has raw licence metadata '{lic.declared_raw}' "
-                        "which could not be resolved to a recognised SPDX identifier."
-                    ),
-                    remediation=(
-                        f"Inspect the upstream repository for '{comp.name}' to confirm redistribution rights "
-                        "and record its SPDX identifier."
-                    ),
+            if not is_company_license and not is_explicitly_allowed:
+                sev = Severity.LOW if config.allow_unknown_license else Severity.MEDIUM
+                findings.append(
+                    ComplianceFinding(
+                        rule_id="LIC-UNKNOWN",
+                        component_name=comp.name,
+                        component_version=comp.version,
+                        license_spdx=spdx_id,
+                        risk_category=lic.risk_category,
+                        severity=sev,
+                        title=f"Undeclared or unrecognised licence for '{comp.name}'",
+                        description=(
+                            f"Component '{comp.name}@{comp.version}' has raw licence metadata '{lic.declared_raw}' "
+                            "which could not be resolved to a recognised SPDX identifier."
+                        ),
+                        remediation=(
+                            f"Inspect the upstream repository for '{comp.name}' to confirm redistribution rights "
+                            "and record its SPDX identifier, or add it to --allow-license / --company-license."
+                        ),
+                    )
                 )
-            )
 
         # 7. Missing verbatim licence text check for non-public-domain components
         if (
-            not lic.license_texts
+            not is_company_license
+            and not lic.license_texts
             and lic.risk_category not in (LicenseRiskCategory.PUBLIC_DOMAIN, LicenseRiskCategory.UNKNOWN)
         ):
             findings.append(
@@ -359,6 +385,12 @@ def generate_third_party_notices(report: AuditReport) -> str:
         "Acknowledgements, copyright notices, and licence terms for each component are",
         "reproduced below in accordance with their respective licence obligations.",
         "",
+        "LEGAL DISCLAIMER:",
+        "  These third-party notices were automatically compiled by Rhada based on package",
+        "  metadata and static file analysis. Rhada is not a legal advisor and does not",
+        "  provide legal advice or warranty of compliance. Software distributors should",
+        "  review these notices with qualified legal counsel before commercial distribution.",
+        "",
         "--------------------------------------------------------------------------------",
         "COMPONENT SUMMARY",
         "--------------------------------------------------------------------------------",
@@ -387,11 +419,33 @@ def generate_third_party_notices(report: AuditReport) -> str:
             ]
         )
         if comp.homepage:
-            lines.append(f"Homepage:  {comp.homepage}")
+            lines.append(f"Homepage:    {comp.homepage}")
+        if comp.source_url and comp.source_url != comp.homepage:
+            lines.append(f"Source Code: {comp.source_url}")
         if lic.is_dual_licensed and lic.license_choices:
             lines.append(
-                f"Note:      Dual-licensed ({' OR '.join(lic.license_choices)}); "
+                f"Note:        Dual-licensed ({' OR '.join(lic.license_choices)}); "
                 f"redistributed under the least restrictive applicable terms."
+            )
+        is_lgpl = "LGPL" in lic.spdx_id.upper() or any("LGPL" in c.upper() for c in (lic.license_choices or []))
+        if is_lgpl:
+            src_link = comp.source_url or comp.homepage or (
+                f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
+                if comp.version and comp.version != "unknown"
+                else f"https://pypi.org/project/{comp.name}/"
+            )
+            lines.extend(
+                [
+                    "",
+                    "LGPL Compliance & Source Code Offer:",
+                    f"  This component is governed by the {lic.spdx_id} licence.",
+                    "  In accordance with LGPL requirements (Section 4(d) / Section 6), recipients of",
+                    "  this distribution are entitled to obtain the complete corresponding source code",
+                    "  for this library. The upstream source code is accessible at:",
+                    f"    {src_link}",
+                    "  Alternatively, if you received this binary distribution and require the exact",
+                    "  source code archive, you may request it from the software distributor.",
+                ]
             )
         lines.append("--------------------------------------------------------------------------------")
         lines.append("")

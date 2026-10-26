@@ -178,6 +178,11 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
                 ext_refs.append(
                     ExternalReference(type=ExternalReferenceType.WEBSITE, url=XsUri(comp.homepage.strip()))
                 )
+        if _is_valid_http_url(comp.source_url) and comp.source_url.strip() != comp.homepage.strip():
+            with contextlib.suppress(ValueError):
+                ext_refs.append(
+                    ExternalReference(type=ExternalReferenceType.VCS, url=XsUri(comp.source_url.strip()))
+                )
 
         props = [
             Property(name="rhada:component_type", value=comp.component_type.value),
@@ -342,7 +347,12 @@ def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
             if spdx_alg and digest:
                 checksums.append({"algorithm": spdx_alg, "checksumValue": digest})
 
-        download_loc = comp.homepage.strip() if _is_valid_http_url(comp.homepage) else "NOASSERTION"
+        download_loc = "NOASSERTION"
+        if _is_valid_http_url(comp.source_url):
+            download_loc = comp.source_url.strip()
+        elif _is_valid_http_url(comp.homepage):
+            download_loc = comp.homepage.strip()
+
         pkg_entry: dict[str, Any] = {
             "SPDXID": spdx_id,
             "name": comp.name,

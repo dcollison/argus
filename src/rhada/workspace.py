@@ -419,16 +419,33 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
         if version == "unknown" and parsed_ver != "unknown":
             version = parsed_ver
 
+    norm_pkg = normalize_pkg_name(name)
     summary = _clean_metadata_field(msg.get("Summary"))
     homepage = _clean_metadata_field(msg.get("Home-page"))
+    source_url = _clean_metadata_field(msg.get("Download-URL"))
+
+    for purl_header in msg.get_all("Project-URL") or []:
+        if "," in purl_header:
+            label, url = purl_header.split(",", 1)
+            cand_url = _clean_metadata_field(url)
+            if not cand_url:
+                continue
+            lbl_lower = label.lower()
+            if not source_url and any(k in lbl_lower for k in ("source", "repository", "repo", "code", "github", "gitlab", "bitbucket")):
+                source_url = cand_url
+            if not homepage and any(k in lbl_lower for k in ("home", "website", "documentation", "docs", "url")):
+                homepage = cand_url
+
+    if not source_url:
+        if homepage and any(h in homepage.lower() for h in ("github.com", "gitlab.com", "bitbucket.org")):
+            source_url = homepage
+        elif norm_pkg and version and version != "unknown":
+            source_url = f"https://pypi.org/project/{norm_pkg}/{version}/#files"
+        elif norm_pkg:
+            source_url = f"https://pypi.org/project/{norm_pkg}/"
+
     if not homepage:
-        for purl_header in msg.get_all("Project-URL") or []:
-            if "," in purl_header:
-                label, url = purl_header.split(",", 1)
-                cand_url = _clean_metadata_field(url)
-                if cand_url and any(k in label.lower() for k in ("home", "repository", "source", "url")):
-                    homepage = cand_url
-                    break
+        homepage = source_url or (f"https://pypi.org/project/{norm_pkg}/" if norm_pkg else "")
 
     author = _clean_metadata_field(msg.get("Author")) or _clean_metadata_field(msg.get("Maintainer"))
     author_email = _clean_metadata_field(msg.get("Author-email")) or _clean_metadata_field(msg.get("Maintainer-email"))
@@ -611,6 +628,7 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
         ecosystem="PyPI",
         description=summary,
         homepage=homepage,
+        source_url=source_url,
         author=author or author_email,
         license_info=lic_info,
         dependencies=deps,
@@ -760,6 +778,7 @@ def _discover_dist_native_libraries(
                         ecosystem=ecosystem,
                         description=f"Bundled native shared library ({leaf}, x86_64)",
                         homepage=homepage,
+                        source_url=getattr(profile, "source_url", "") or homepage,
                         license_info=lic_info,
                         hashes={"SHA256": sha256_val} if sha256_val else {},
                         bundled_files=[str(full_path)],
@@ -1142,12 +1161,15 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                     comp.discovery_evidence.insert(0, "uv.lock")
             else:
                 inferred_mods = sorted({pname.replace("-", "_"), *KNOWN_PACKAGE_TOP_MODULES.get(pname, [])})
+                p_src = f"https://pypi.org/project/{pname}/{pver}/#files" if pver != "unknown" else f"https://pypi.org/project/{pname}/"
                 comp = Component(
                     name=pname,
                     version=pver,
                     component_type=ComponentType.PYTHON_PACKAGE,
                     scope=scope,
                     ecosystem="PyPI",
+                    homepage=f"https://pypi.org/project/{pname}/",
+                    source_url=p_src,
                     hashes=hashes,
                     dependencies=dep_names,
                     top_level_modules=inferred_mods,
@@ -1223,6 +1245,8 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                     component_type=ComponentType.PYTHON_PACKAGE,
                     scope=ComponentScope.REQUIRED,
                     ecosystem="PyPI",
+                    homepage=f"https://pypi.org/project/{dep_name}/",
+                    source_url=f"https://pypi.org/project/{dep_name}/",
                     top_level_modules=inferred_mods,
                     is_bundled=True,
                     discovery_evidence=["pyproject.toml"],

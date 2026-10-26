@@ -186,9 +186,106 @@ def test_generate_third_party_notices(tmp_path: Path) -> None:
 
     text = out_file.read_text(encoding="utf-8")
     assert "THIRD-PARTY SOFTWARE NOTICES" in text
+    assert "LEGAL DISCLAIMER:" in text
     assert "Application: billing-service (2.1.0)" in text
     assert "httpx (0.27.0) - BSD-3-Clause [Python Package]" in text
     assert "openssl (3.0.13) - Apache-2.0 [Native Library]" in text
     assert "Copyright © 2019, Encode OSS Ltd." in text
     assert "Encode OSS Notice file content" in text
     assert "Standard Apache-2.0 License Notice" in text
+
+
+def test_lgpl_source_code_link_in_findings_and_notices(tmp_path: Path) -> None:
+    comp_lgpl = Component(
+        name="py-lgpl-core",
+        version="2.0.1",
+        component_type=ComponentType.PYTHON_PACKAGE,
+        homepage="https://example.org/py-lgpl",
+        source_url="https://github.com/example/py-lgpl-core",
+        license_info=build_license_info(
+            declared_raw="LGPL-3.0-only",
+            license_texts={"COPYING.LESSER": "GNU LESSER GENERAL PUBLIC LICENSE Version 3"},
+        ),
+        is_bundled=True,
+    )
+
+    findings = evaluate_compliance(
+        [comp_lgpl],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(),
+    )
+    lgpl_findings = [f for f in findings if f.rule_id == "LIC-LGPL-DYNAMIC"]
+    assert len(lgpl_findings) == 1
+    finding = lgpl_findings[0]
+    assert "https://github.com/example/py-lgpl-core" in finding.description
+    assert "https://github.com/example/py-lgpl-core" in finding.remediation
+
+    report = AuditReport(
+        target_name="test-app",
+        target_version="1.0.0",
+        mode=AuditMode.SOURCE,
+        components=[comp_lgpl],
+    )
+    out_file = tmp_path / "THIRD_PARTY_NOTICES"
+    write_third_party_notices(report, out_file)
+    content = out_file.read_text(encoding="utf-8")
+    assert "LGPL Compliance & Source Code Offer:" in content
+    assert "https://github.com/example/py-lgpl-core" in content
+    assert "Source Code: https://github.com/example/py-lgpl-core" in content
+
+
+def test_company_internal_license_suppresses_violations() -> None:
+    corp_comp = Component(
+        name="acme-internal-auth",
+        version="1.0.0",
+        component_type=ComponentType.PYTHON_PACKAGE,
+        license_info=build_license_info(
+            declared_raw="LicenseRef-Acme-Proprietary",
+        ),
+        is_bundled=True,
+    )
+
+    # 1. Without approving the internal licence, LIC-PROPRIETARY triggers
+    findings_default = evaluate_compliance(
+        [corp_comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(),
+    )
+    assert any(f.rule_id == "LIC-PROPRIETARY" for f in findings_default)
+
+    # 2. Approved via company_licenses -> No violations
+    findings_company = evaluate_compliance(
+        [corp_comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(company_licenses={"LicenseRef-Acme-Proprietary"}),
+    )
+    assert not any(f.rule_id in ("LIC-PROPRIETARY", "LIC-POLICY-NOT-ALLOWED", "LIC-UNKNOWN") for f in findings_company)
+
+    # 3. Approved via allowed_licenses -> No violations
+    findings_allowed = evaluate_compliance(
+        [corp_comp],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"LicenseRef-Acme-Proprietary"}),
+    )
+    assert not any(f.rule_id in ("LIC-PROPRIETARY", "LIC-UNKNOWN") for f in findings_allowed)
+
+
+def test_legal_disclaimer_coverage() -> None:
+    from rhada.models import LEGAL_DISCLAIMER
+    from rhada.reporter import format_report_text
+
+    report = AuditReport(
+        target_name="disclaimer-test",
+        target_version="1.0.0",
+        mode=AuditMode.SOURCE,
+    )
+    assert report.disclaimer == LEGAL_DISCLAIMER
+    assert report.to_dict()["disclaimer"] == LEGAL_DISCLAIMER
+
+    text_report = format_report_text(report)
+    assert "Rhada is an automated analysis tool, not a provider of legal advice" in text_report
+

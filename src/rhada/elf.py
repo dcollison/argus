@@ -1046,6 +1046,7 @@ def elf_to_native_component(
             license_texts={"EMBEDDED_NATIVE_LICENSE": profile.license_text},
         )
         homepage = profile.homepage
+        source_url = getattr(profile, "source_url", "") or homepage
     else:
         lic_info = LicenseInfo(
             declared_raw="UNKNOWN",
@@ -1053,6 +1054,7 @@ def elf_to_native_component(
             risk_category=classify_single_spdx("NOASSERTION"),
         )
         homepage = ""
+        source_url = ""
 
     is_pe = elf_info.binary_format.upper() == "PE" or fname_lower.endswith(".dll")
     ecosystem = "Windows" if is_pe else "Linux"
@@ -1077,6 +1079,7 @@ def elf_to_native_component(
         ecosystem=ecosystem,
         description=f"Bundled native shared library ({fname}, {elf_info.architecture})",
         homepage=homepage,
+        source_url=source_url,
         license_info=lic_info,
         hashes={"SHA256": elf_info.sha256} if elf_info.sha256 else {},
         dependencies=list(elf_info.needed_libs),
