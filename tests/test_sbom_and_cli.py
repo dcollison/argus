@@ -375,3 +375,70 @@ dependencies = ["acme-internal-service>=1.0.0"]
     assert "Status: PASSED" in strip_ansi(res_allow_spdx.output)
 
 
+
+
+def test_cyclonedx_custom_licenseref_and_spdx_originator() -> None:
+    from rhada.models import (
+        AuditMode,
+        AuditReport,
+        BundlerType,
+        Component,
+        ComponentType,
+        DistributionLayout,
+    )
+    from rhada.sbom import generate_cyclonedx_sbom, generate_spdx_sbom
+    from rhada.spdx import build_license_info
+
+    comp_custom = Component(
+        name="custom-plugin",
+        version="1.0.0",
+        component_type=ComponentType.PYTHON_PACKAGE,
+        is_bundled=True,
+        author="Acme Corporation <devs@acme.com>",
+        license_info=build_license_info("LicenseRef-Custom-Enterprise"),
+    )
+    comp_compound = Component(
+        name="dual-tool",
+        version="2.0.0",
+        component_type=ComponentType.PYTHON_PACKAGE,
+        is_bundled=True,
+        author="Person: Jane Doe <jane@example.com>",
+        license_info=build_license_info("MIT OR LicenseRef-Custom-Enterprise"),
+    )
+
+    report = AuditReport(
+        target_name="test-app",
+        target_version="1.0.0",
+        mode=AuditMode.COMPILED_DIST,
+        bundler_type=BundlerType.NUITKA,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        components=[comp_custom, comp_compound],
+    )
+
+    # CycloneDX output verification
+    cdx = generate_cyclonedx_sbom(report)
+    cdx_comps = {c["name"]: c for c in cdx["components"]}
+
+    # LicenseRef-Custom-Enterprise should be emitted under license.id, not license.name
+    custom_lics = cdx_comps["custom-plugin"]["licenses"]
+    assert len(custom_lics) == 1
+    assert "license" in custom_lics[0]
+    assert custom_lics[0]["license"]["id"] == "LicenseRef-Custom-Enterprise"
+
+    # Compound expression with LicenseRef should be emitted as expression
+    compound_lics = cdx_comps["dual-tool"]["licenses"]
+    assert len(compound_lics) == 1
+    assert "expression" in compound_lics[0]
+    assert compound_lics[0]["expression"] == "MIT OR LicenseRef-Custom-Enterprise"
+
+    # SPDX output verification
+    spdx = generate_spdx_sbom(report)
+    spdx_pkgs = {p["name"]: p for p in spdx["packages"]}
+
+    # Acme Corporation should be recognized as Organization, formatted with email in parentheses
+    orig_acme = spdx_pkgs["custom-plugin"]["originator"]
+    assert orig_acme == "Organization: Acme Corporation (devs@acme.com)"
+
+    # Pre-prefixed Person: Jane Doe should not have duplicate prefix
+    orig_jane = spdx_pkgs["dual-tool"]["originator"]
+    assert orig_jane == "Person: Jane Doe (jane@example.com)"

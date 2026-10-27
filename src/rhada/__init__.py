@@ -1,6 +1,6 @@
 """Rhada: Legal compliance, SBOM generation, and security auditor for Python and compiled distributions."""
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 from rhada.auditor import compute_exit_code, run_audit
 from rhada.elf import is_pe_file, parse_pe_binary
