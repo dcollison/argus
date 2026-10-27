@@ -1215,8 +1215,10 @@ def parse_spdx_expression(
         best_cat = min((classify_single_spdx(c) for c in candidates), key=lambda c: RISK_SEVERITY_ORDER[c])
         return spdx_expr, best_cat, True, candidates
 
-    primary = candidates[0]
-    return primary, classify_single_spdx(primary), False, candidates
+    # When multiple distinct licenses are declared without explicit 'and', treat as dual-licensed (OR) choice per PEP 639
+    spdx_expr = " OR ".join(candidates)
+    best_cat = min((classify_single_spdx(c) for c in candidates), key=lambda c: RISK_SEVERITY_ORDER[c])
+    return spdx_expr, best_cat, True, candidates
 
 
 def evaluate_spdx_allowlist(spdx_expr: str, allowed_upper: set[str]) -> bool:
@@ -1316,7 +1318,7 @@ def extract_copyright_notices(
                 seen_lower.add(norm)
                 notices.append(line)
 
-    if not notices and (author or author_email):
+    if author or author_email:
         parts = [
             p.strip()
             for p in (
@@ -1326,7 +1328,10 @@ def extract_copyright_notices(
             if p and p.strip()
         ]
         if parts:
-            notices.append(f"Copyright (c) {' '.join(parts)}")
+            author_line = f"Copyright (c) {' '.join(parts)}"
+            author_token = author.lower().strip() if author else author_email.lower().strip()
+            if not any(author_token in n.lower() for n in notices):
+                notices.append(author_line)
 
     return notices
 

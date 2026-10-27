@@ -364,3 +364,45 @@ def test_normalize_single_license_heuristics_and_boundaries() -> None:
 
 
 
+
+
+def test_parse_spdx_expression_divergent_candidates_multi_licensing() -> None:
+    # 1. Divergence between declared_raw "MIT" and classifier GPL-3.0
+    spdx_id, risk_cat, is_dual, choices = parse_spdx_expression(
+        "MIT",
+        classifiers=["License :: OSI Approved :: GNU General Public License v3 (GPLv3)"],
+    )
+    assert spdx_id == "MIT OR GPL-3.0-only"
+    assert is_dual is True
+    assert choices == ["MIT", "GPL-3.0-only"]
+    assert risk_cat == LicenseRiskCategory.PERMISSIVE
+
+    # 2. Multiple classifiers without declared raw
+    spdx_id2, _, is_dual2, choices2 = parse_spdx_expression(
+        "",
+        classifiers=[
+            "License :: OSI Approved :: MIT License",
+            "License :: OSI Approved :: Apache Software License",
+        ],
+    )
+    assert spdx_id2 == "MIT OR Apache-2.0"
+    assert is_dual2 is True
+    assert choices2 == ["MIT", "Apache-2.0"]
+
+
+def test_extract_copyright_notices_author_fallback_preservation() -> None:
+    # Notice text has third-party or template copyright
+    notices_in = {"LICENSE": "Copyright 2012 Original Contributor\nSome text"}
+    result = extract_copyright_notices(notices_in, author="Alice Smith", author_email="alice@example.com")
+    assert len(result) == 2
+    assert "Copyright 2012 Original Contributor" in result[0]
+    assert "Alice Smith <alice@example.com>" in result[1]
+
+    # If author is already mentioned in notices, do not duplicate
+    result_dup = extract_copyright_notices(
+        {"LICENSE": "Copyright (c) 2023 Alice Smith"},
+        author="Alice Smith",
+        author_email="alice@example.com",
+    )
+    assert len(result_dup) == 1
+    assert result_dup[0] == "Copyright (c) 2023 Alice Smith"

@@ -6,7 +6,10 @@ import ast
 import configparser
 import contextlib
 import email
+import os
 import re
+import shlex
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -81,6 +84,7 @@ class WorkspaceMetadata:
     native_components: list[Component] = field(default_factory=list)
     package_libraries: dict[str, list[str]] = field(default_factory=dict)
     elf_binaries: list[ElfBinaryInfo] = field(default_factory=list)
+    nuitka_directives: dict[str, list[str]] = field(default_factory=dict)
 
 
 LICENSE_FILE_PATTERNS = (
@@ -989,6 +993,180 @@ def _discover_dist_native_libraries(
     return results
 
 
+NUITKA_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*nuitka-project(?:-if\s+(.*?))?:\s*(.*)$",
+    re.IGNORECASE,
+)
+NUITKA_CONT_RE = re.compile(
+    r"^\s*#\s{2,}(.*)$",
+)
+
+
+def _eval_nuitka_condition(condition_str: str) -> bool:
+    """Safely evaluate a Nuitka conditional directive expression without arbitrary code execution."""
+    cleaned = condition_str.strip()
+    if not cleaned:
+        return True
+    try:
+        expr_ast = ast.parse(cleaned, mode="eval")
+    except SyntaxError:
+        return True
+
+    safe_names = {
+        "sys": sys,
+        "os": os,
+        "True": True,
+        "False": False,
+    }
+
+    class SafeEvalVisitor(ast.NodeVisitor):
+        def visit(self, node: ast.AST) -> Any:
+            if isinstance(node, ast.Expression):
+                return self.visit(node.body)
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                if node.id in safe_names:
+                    return safe_names[node.id]
+                raise ValueError(f"Unsafe name: {node.id}")
+            if isinstance(node, ast.Attribute):
+                val = self.visit(node.value)
+                if node.attr in {"platform", "name", "version_info"}:
+                    return getattr(val, node.attr)
+                raise ValueError(f"Unsafe attribute: {node.attr}")
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                return not self.visit(node.operand)
+            if isinstance(node, ast.BoolOp):
+                vals = [self.visit(v) for v in node.values]
+                if isinstance(node.op, ast.And):
+                    return all(vals)
+                if isinstance(node.op, ast.Or):
+                    return any(vals)
+            if isinstance(node, ast.Compare):
+                left = self.visit(node.left)
+                for op, comp_node in zip(node.ops, node.comparators, strict=False):
+                    right = self.visit(comp_node)
+                    if isinstance(op, ast.Eq) and left != right:
+                        return False
+                    if isinstance(op, ast.NotEq) and left == right:
+                        return False
+                    if isinstance(op, ast.In) and left not in right:
+                        return False
+                    if isinstance(op, ast.NotIn) and left in right:
+                        return False
+                    if isinstance(op, ast.Lt) and not (left < right):
+                        return False
+                    if isinstance(op, ast.LtE) and not (left <= right):
+                        return False
+                    if isinstance(op, ast.Gt) and not (left > right):
+                        return False
+                    if isinstance(op, ast.GtE) and not (left >= right):
+                        return False
+                    left = right
+                return True
+            raise ValueError(f"Unsupported AST node: {type(node)}")
+
+        def generic_visit(self, node: ast.AST) -> Any:
+            raise ValueError(f"Unsupported AST node: {type(node)}")
+
+    try:
+        return bool(SafeEvalVisitor().visit(expr_ast))
+    except (ValueError, TypeError, AttributeError, SyntaxError):
+        # Default to True on dynamic/unparseable conditions to avoid dropping dependencies in compliance checks
+        return True
+
+
+def _parse_nuitka_tokens(tokens: list[str], directives: dict[str, list[str]]) -> None:
+    """Parse tokenized Nuitka CLI options into directive categories."""
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        directives["raw_options"].append(token)
+        for flag, key in (
+            ("--include-package", "include_packages"),
+            ("--include-module", "include_modules"),
+            ("--include-package-data", "include_package_data"),
+            ("--include-data-dir", "include_data_dirs"),
+            ("--include-data-files", "include_data_files"),
+            ("--enable-plugin", "plugins"),
+            ("--nofollow-import-to", "nofollow_imports"),
+        ):
+            if token.startswith(f"{flag}="):
+                val = token[len(flag) + 1:].strip()
+                if val and val not in directives[key]:
+                    directives[key].append(val)
+                break
+            elif token == flag and i + 1 < len(tokens):
+                i += 1
+                val = tokens[i].strip()
+                directives["raw_options"].append(val)
+                if val and val not in directives[key]:
+                    directives[key].append(val)
+                break
+        i += 1
+
+
+def parse_nuitka_source_directives(file_path: Path) -> dict[str, list[str]]:
+    """
+    Parse Nuitka project directives (# nuitka-project: and # nuitka-project-if:)
+    from a Python script, safely evaluating platform conditionals.
+    """
+    directives: dict[str, list[str]] = {
+        "include_packages": [],
+        "include_modules": [],
+        "include_package_data": [],
+        "include_data_dirs": [],
+        "include_data_files": [],
+        "plugins": [],
+        "nofollow_imports": [],
+        "raw_options": [],
+    }
+    if not file_path.is_file():
+        return directives
+
+    content = _read_text_safe(file_path, max_bytes=512_000)
+    if not content or "nuitka-project" not in content:
+        return directives
+
+    in_active_block = False
+    active_condition_met = True
+
+    for line in content.splitlines():
+        line_stripped = line.strip()
+        if not line_stripped.startswith("#"):
+            in_active_block = False
+            continue
+
+        m_dir = NUITKA_DIRECTIVE_RE.match(line)
+        if m_dir:
+            cond_str = m_dir.group(1)
+            rem = m_dir.group(2).strip()
+            active_condition_met = _eval_nuitka_condition(cond_str) if cond_str else True
+            in_active_block = True
+            if active_condition_met and rem:
+                try:
+                    tokens = shlex.split(rem)
+                    _parse_nuitka_tokens(tokens, directives)
+                except ValueError:
+                    pass
+            continue
+
+        if in_active_block and active_condition_met:
+            m_cont = NUITKA_CONT_RE.match(line)
+            if m_cont:
+                cont_text = m_cont.group(1).strip()
+                if cont_text:
+                    try:
+                        tokens = shlex.split(cont_text)
+                        _parse_nuitka_tokens(tokens, directives)
+                    except ValueError:
+                        pass
+            else:
+                in_active_block = False
+
+    return directives
+
+
 def _parse_pyproject_toml(pyproject_path: Path) -> dict[str, Any]:
     """Read and parse pyproject.toml."""
     if not pyproject_path.is_file():
@@ -1274,6 +1452,87 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                 dep_name = parse_req_name(req_str)
                 if dep_name:
                     ws.direct_dev_deps.add(dep_name)
+
+    # Tool Nuitka configuration in pyproject.toml
+    tool_nuitka = pyproject_data.get("tool", {}).get("nuitka", {})
+    if isinstance(tool_nuitka, dict):
+        for key, field_name in (
+            ("include-package", "include_packages"),
+            ("include-packages", "include_packages"),
+            ("include_package", "include_packages"),
+            ("include_packages", "include_packages"),
+            ("include-module", "include_modules"),
+            ("include-modules", "include_modules"),
+            ("include_module", "include_modules"),
+            ("include_modules", "include_modules"),
+            ("include-package-data", "include_package_data"),
+            ("include_package_data", "include_package_data"),
+            ("enable-plugin", "plugins"),
+            ("enable-plugins", "plugins"),
+            ("plugins", "plugins"),
+        ):
+            val = tool_nuitka.get(key)
+            if isinstance(val, str):
+                vals = [v.strip() for v in val.split(",") if v.strip()]
+            elif isinstance(val, list):
+                vals = [str(v).strip() for v in val if str(v).strip()]
+            else:
+                vals = []
+            for v in vals:
+                cur = ws.nuitka_directives.setdefault(field_name, [])
+                if v not in cur:
+                    cur.append(v)
+
+    # Discover Nuitka directives in project source files
+    py_candidates: list[Path] = []
+    try:
+        py_candidates.extend(project_path.glob("*.py"))
+        src_dir = project_path / "src"
+        if src_dir.is_dir():
+            py_candidates.extend(src_dir.glob("*.py"))
+            py_candidates.extend(src_dir.glob("*/*.py"))
+    except OSError:
+        pass
+
+    for py_file in py_candidates:
+        file_directives = parse_nuitka_source_directives(py_file)
+        for k, vlist in file_directives.items():
+            cur = ws.nuitka_directives.setdefault(k, [])
+            for item in vlist:
+                if item not in cur:
+                    cur.append(item)
+
+    # Inject Nuitka direct dependencies into direct_runtime_deps
+    for npkg in ws.nuitka_directives.get("include_packages", []):
+        for p in npkg.split(","):
+            p_clean = normalize_pkg_name(p.strip())
+            if p_clean:
+                ws.direct_runtime_deps.add(p_clean)
+    for npkg in ws.nuitka_directives.get("include_package_data", []):
+        for p in npkg.split(","):
+            p_clean = normalize_pkg_name(p.strip())
+            if p_clean:
+                ws.direct_runtime_deps.add(p_clean)
+    for nmod in ws.nuitka_directives.get("include_modules", []):
+        for m in nmod.split(","):
+            m_clean = m.strip()
+            if m_clean:
+                top_pkg = normalize_pkg_name(m_clean.split(".")[0])
+                if top_pkg:
+                    ws.direct_runtime_deps.add(top_pkg)
+    for nplug in ws.nuitka_directives.get("plugins", []):
+        plug_pkg = normalize_pkg_name(nplug.strip())
+        if plug_pkg in KNOWN_PACKAGE_TOP_MODULES or plug_pkg in (
+            "numpy",
+            "torch",
+            "scipy",
+            "matplotlib",
+            "pyqt5",
+            "pyside6",
+            "kivy",
+            "gevent",
+        ):
+            ws.direct_runtime_deps.add(plug_pkg)
 
     # 1. Inspect virtualenv (.venv) for rich .dist-info metadata and licence texts
     venv_components: dict[str, Component] = {}

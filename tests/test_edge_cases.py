@@ -730,3 +730,70 @@ def test_parse_req_name_direct_urls_and_archives() -> None:
 
 
 
+
+
+def test_parse_nuitka_source_directives(tmp_path: Path) -> None:
+    from rhada.workspace import parse_nuitka_source_directives
+
+    main_py = tmp_path / "main.py"
+    main_py.write_text(
+        '# nuitka-project: --include-package=cryptography --enable-plugin=numpy\n'
+        '# nuitka-project: --include-package-data=certifi\n'
+        '# nuitka-project: --include-data-files="configs/*.json=configs/"\n'
+        '# nuitka-project:\n'
+        '#    --include-module=engine.worker\n'
+        '#    --include-package=sqlalchemy\n'
+        '# nuitka-project-if sys.platform != "nonexistent_os":\n'
+        '#    --include-package=pytest\n'
+        '# nuitka-project-if sys.platform == "nonexistent_os":\n'
+        '#    --include-package=should_be_skipped\n'
+        'import os\n'
+        'print("hello")\n',
+        encoding="utf-8",
+    )
+
+    directives = parse_nuitka_source_directives(main_py)
+    assert "cryptography" in directives["include_packages"]
+    assert "sqlalchemy" in directives["include_packages"]
+    assert "pytest" in directives["include_packages"]
+    assert "should_be_skipped" not in directives["include_packages"]
+    assert "numpy" in directives["plugins"]
+    assert "certifi" in directives["include_package_data"]
+    assert "engine.worker" in directives["include_modules"]
+    assert any("configs/*.json=configs/" in opt for opt in directives["include_data_files"])
+
+
+def test_inspect_workspace_nuitka_directives_and_dist_correlation(tmp_path: Path) -> None:
+    from rhada.dist import DistInspectionResult, correlate_workspace_and_dist
+    from rhada.models import BundlerType, ComponentScope, DistributionLayout
+    from rhada.workspace import inspect_workspace
+
+    ws_dir = tmp_path / "proj"
+    ws_dir.mkdir()
+    (ws_dir / "pyproject.toml").write_text(
+        '[project]\nname = "my-app"\nversion = "1.0.0"\ndependencies = []\n',
+        encoding="utf-8",
+    )
+    (ws_dir / "main.py").write_text(
+        '# nuitka-project: --include-package=cryptography\n'
+        '# nuitka-project: --enable-plugin=numpy\n',
+        encoding="utf-8",
+    )
+
+    ws = inspect_workspace(ws_dir)
+    assert "cryptography" in ws.direct_runtime_deps
+    assert "numpy" in ws.direct_runtime_deps
+    assert "cryptography" in ws.nuitka_directives.get("include_packages", [])
+
+    # Stub component in ws.components
+    assert "cryptography" in ws.components
+    assert ws.components["cryptography"].scope == ComponentScope.REQUIRED
+
+    # Mock dist result without discovered distributions (e.g. monolithic binary)
+    dist_res = DistInspectionResult(
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        bundler_type=BundlerType.NUITKA,
+    )
+    active, _excluded = correlate_workspace_and_dist(ws, dist_res)
+    active_names = {c.name for c in active}
+    assert "cryptography" in active_names
