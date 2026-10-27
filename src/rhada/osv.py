@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import re
 from typing import Any
 
 import httpx
@@ -232,14 +234,23 @@ def parse_osv_vulnerability(
 
 
 def _build_resolved_dependency(comp: Component) -> ResolvedDependency | None:
-    """Create a `pip-audit` `ResolvedDependency` for a Python package component."""
+    """Create a `pip-audit` `ResolvedDependency` for a Python package component with version sanitization."""
     if comp.component_type != ComponentType.PYTHON_PACKAGE:
         return None
-    if not comp.version or comp.version == "unknown":
+    raw_ver = (comp.version or "").strip()
+    if not raw_ver or raw_ver.lower() == "unknown":
         return None
+    # Strip leading 'v' or 'V' (e.g. 'v1.2.3' -> '1.2.3')
+    if raw_ver.lower().startswith("v") and len(raw_ver) > 1 and raw_ver[1].isdigit():
+        raw_ver = raw_ver[1:]
     try:
-        return ResolvedDependency(comp.name, Version(comp.version))
+        return ResolvedDependency(comp.name, Version(raw_ver))
     except InvalidVersion:
+        # Fall back to extracting standard numeric version part (e.g. 2.1.0 from 2.1.0-alpha+build.123 or snapshot)
+        m = re.search(r"(\d+(?:\.\d+)+)", raw_ver)
+        if m:
+            with contextlib.suppress(InvalidVersion):
+                return ResolvedDependency(comp.name, Version(m.group(1)))
         return None
 
 
