@@ -11,6 +11,7 @@ from rhada.auditor import run_audit
 from rhada.compliance import evaluate_compliance
 from rhada.dist import inspect_compiled_distribution
 from rhada.elf import (
+    _match_known_native_profile,
     is_elf_file,
     parse_elf_binary,
     parse_elf_bytes,
@@ -28,7 +29,12 @@ from rhada.models import (
     LinkageStatus,
     Severity,
 )
-from rhada.osv import OsvClient, compute_cvss_v3_score, score_to_severity
+from rhada.osv import (
+    OsvClient,
+    compute_cvss_v3_score,
+    parse_osv_vulnerability,
+    score_to_severity,
+)
 from rhada.reporter import format_report_text
 from rhada.sbom import serialize_sbom
 from rhada.spdx import (
@@ -38,7 +44,13 @@ from rhada.spdx import (
     normalize_single_license,
     parse_spdx_expression,
 )
-from rhada.workspace import inspect_workspace, normalize_pkg_name, parse_req_name
+from rhada.workspace import (
+    _parse_setup_cfg,
+    _read_text_safe,
+    inspect_workspace,
+    normalize_pkg_name,
+    parse_req_name,
+)
 from tests.helpers import build_synthetic_elf64, create_dist_info
 
 
@@ -615,6 +627,106 @@ def test_compound_spdx_multiword_unknown_and_metadata_placeholders(tmp_path: Pat
         component_version="2.0.0",
     )
     assert v.remediation == "Upgrade demo to version >= 2.2.0, 2.10.0"
+
+
+def test_native_profile_prefix_boundary_matching() -> None:
+    # Exact and delimited matches
+    prof_zlib = _match_known_native_profile("libz")
+    assert prof_zlib is not None
+    assert prof_zlib.canonical_name == "zlib"
+
+    prof_zlib_ver = _match_known_native_profile("libz-1.2.11")
+    assert prof_zlib_ver is not None
+    assert prof_zlib_ver.canonical_name == "zlib"
+
+    prof_crypto = _match_known_native_profile("libcrypto")
+    assert prof_crypto is not None
+    assert prof_crypto.canonical_name == "openssl"
+
+    # Distinct libraries sharing prefix must not collide
+    assert _match_known_native_profile("libzmq") is None
+    assert _match_known_native_profile("libzip") is None
+    assert _match_known_native_profile("libzbar") is None
+    assert _match_known_native_profile("libcryptopp") is None
+
+
+def test_setup_cfg_percent_interpolation_resilience(tmp_path: Path) -> None:
+    cfg_file = tmp_path / "setup.cfg"
+    cfg_file.write_text(
+        "[metadata]\nname = demo\nversion = 1.0.0\ndescription = 100% pure python\n",
+        encoding="utf-8",
+    )
+    res = _parse_setup_cfg(cfg_file)
+    assert res["name"] == "demo"
+    assert res["version"] == "1.0.0"
+    assert res["description"] == "100% pure python"
+
+
+def test_utf8_bom_resilience(tmp_path: Path) -> None:
+    bom_file = tmp_path / "METADATA"
+    # Write UTF-8 with BOM prefix
+    bom_content = b"\xef\xbb\xbfName: bom-pkg\nVersion: 2.0.0\nSummary: BOM test\n"
+    bom_file.write_bytes(bom_content)
+    text = _read_text_safe(bom_file)
+    assert not text.startswith("\ufeff")
+    assert "Name: bom-pkg" in text
+
+
+def test_cvss_v4_scoring_and_parsing() -> None:
+    v4_vector = "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:H/SI:H/SA:H"
+    score = compute_cvss_v3_score(v4_vector)
+    assert score is not None
+    assert score >= 9.0
+
+    raw_advisory = {
+        "id": "GHSA-v4-critical",
+        "summary": "Critical Remote Code Execution",
+        "severity": [{"type": "CVSS_V4", "score": v4_vector}],
+    }
+    vuln = parse_osv_vulnerability(raw_advisory, "demo-package", "1.0.0")
+    assert vuln.severity == Severity.CRITICAL
+    assert vuln.cvss_score is not None
+    assert vuln.cvss_score >= 9.0
+    assert vuln.cvss_vector == v4_vector
+
+
+def test_record_traversal_protection(tmp_path: Path) -> None:
+    sp_dir = tmp_path / "site-packages"
+    sp_dir.mkdir(parents=True)
+    dist_dir = sp_dir / "evil_pkg-1.0.0.dist-info"
+    dist_dir.mkdir(parents=True)
+
+    # Outside file that should NOT be traversed to
+    secret_file = tmp_path / "secret.dll"
+    secret_file.write_bytes(b"MZ\x90\x00not-real")
+
+    # RECORD containing paths attempting directory traversal
+    record_file = dist_dir / "RECORD"
+    record_file.write_text(
+        "../../secret.dll,sha256=xxx,123\n"
+        "sub/../../secret.dll,sha256=xxx,123\n"
+        "C:/windows/system32/calc.exe,sha256=xxx,123\n",
+        encoding="utf-8",
+    )
+    meta_file = dist_dir / "METADATA"
+    meta_file.write_text("Metadata-Version: 2.1\nName: evil-pkg\nVersion: 1.0.0\n", encoding="utf-8")
+
+    from rhada.workspace import _discover_dist_native_libraries
+    pkg_comp = Component(name="evil-pkg", version="1.0.0")
+    results = _discover_dist_native_libraries(dist_dir, pkg_comp)
+    # None of the traversed paths should be loaded as native components
+    assert len(results) == 0
+
+
+def test_parse_req_name_direct_urls_and_archives() -> None:
+    assert parse_req_name("git+https://github.com/org/proj.git#egg=proj") == "proj"
+    assert parse_req_name("git+https://github.com/org/my-cool-package.git") == "my-cool-package"
+    assert parse_req_name("wheels/foo_bar-1.0-py3-none-any.whl") == "foo-bar"
+    assert parse_req_name("dist/cool-lib-2.3.4.tar.gz") == "cool-lib"
+    assert parse_req_name("requests>=2.0.0 ; sys_platform == 'win32'") == "requests"
+    assert parse_req_name("Flask[async] >= 2.0") == "flask"
+
+
 
 
 

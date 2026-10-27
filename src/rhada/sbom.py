@@ -250,7 +250,12 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
     for comp, cdx_comp in comp_cdx_pairs:
         for v in comp.vulnerabilities:
             score_dec = Decimal(f"{v.cvss_score:.1f}") if v.cvss_score is not None else None
-            method = VulnerabilityScoreSource.CVSS_V3 if v.cvss_score is not None or v.cvss_vector else None
+            if v.cvss_vector and v.cvss_vector.upper().startswith("CVSS:4"):
+                method = VulnerabilityScoreSource.CVSS_V4
+            elif v.cvss_score is not None or v.cvss_vector:
+                method = VulnerabilityScoreSource.CVSS_V3
+            else:
+                method = None
             rating = VulnerabilityRating(
                 severity=SEVERITY_TO_CYCLONEDX.get(v.severity, VulnerabilitySeverity.MEDIUM),
                 score=score_dec,

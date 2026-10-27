@@ -34,6 +34,10 @@ RAW_TO_SPDX: dict[str, str] = {
     "apache software license": "Apache-2.0",
     "apache software license 2.0": "Apache-2.0",
     "asl 2": "Apache-2.0",
+    "apache-1.1": "Apache-1.1",
+    "apache 1.1": "Apache-1.1",
+    "apache license 1.1": "Apache-1.1",
+    "apache software license 1.1": "Apache-1.1",
     "bsd": "BSD-3-Clause",
     "bsd license": "BSD-3-Clause",
     "bsd-3-clause": "BSD-3-Clause",
@@ -123,6 +127,14 @@ RAW_TO_SPDX: dict[str, str] = {
     "hpnd": "HPND",
     "historical permission notice and disclaimer (hpnd)": "HPND",
     "artistic-2.0": "Artistic-2.0",
+    "bsl-1.0": "BSL-1.0",
+    "boost": "BSL-1.0",
+    "boost software license": "BSL-1.0",
+    "boost software license 1.0": "BSL-1.0",
+    "boost software license - version 1.0": "BSL-1.0",
+    "mit-0": "MIT-0",
+    "python-2.0": "Python-2.0",
+    "python 2.0": "Python-2.0",
     "proprietary": "LicenseRef-Proprietary",
     "commercial": "LicenseRef-Proprietary",
     "other/proprietary license": "LicenseRef-Proprietary",
@@ -165,11 +177,15 @@ TROVE_CLASSIFIER_MAP: dict[str, str] = {
 PERMISSIVE_SPDX = {
     "MIT",
     "Apache-2.0",
+    "Apache-1.1",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
     "ISC",
     "PSF-2.0",
+    "BSL-1.0",
+    "MIT-0",
+    "Python-2.0",
     "Zlib",
     "HPND",
     "Artistic-2.0",
@@ -865,34 +881,38 @@ def normalize_single_license(raw: str) -> str:
                 return f"{base_norm} WITH LLVM-exception"
             return f"{base_norm} WITH {exc_part}"
 
-    # Heuristic substring matching for verbose licence strings
-    if "affero" in lower or "agpl" in lower:
+    # Word-boundary and heuristic regex matching for verbose licence strings
+    if re.search(r"\b(?:affero|agpl)\b", lower):
         return "AGPL-3.0-or-later"
-    if "lesser general public" in lower or "lgpl" in lower:
+    if "lesser general public" in lower or re.search(r"\blgpl\b", lower):
         if "3" in lower:
             return "LGPL-3.0-or-later" if "+" in lower or "later" in lower else "LGPL-3.0-only"
         return "LGPL-2.1-or-later" if "+" in lower or "later" in lower else "LGPL-2.1-only"
-    if "general public license" in lower or re.search(r"\bgpl\b", lower):
+    if ("general public license" in lower or re.search(r"\bgpl\b", lower)) and "compatible" not in lower:
         if "gcc" in lower and "exception" in lower:
             return "GPL-3.0-with-GCC-exception"
         if "2" in lower:
             return "GPL-2.0-or-later" if "+" in lower or "later" in lower else "GPL-2.0-only"
         return "GPL-3.0-or-later" if "+" in lower or "later" in lower else "GPL-3.0-only"
-    if "mozilla public license" in lower or "mpl" in lower:
+    if "mozilla public license" in lower or re.search(r"\bmpl\b", lower):
         return "MPL-2.0"
     if "apache" in lower:
+        if "1.1" in lower:
+            return "Apache-1.1"
+        if "1.0" in lower:
+            return "Apache-1.0"
         return "Apache-2.0"
-    if "bsd" in lower:
-        if "0" in lower or "zero" in lower:
+    if re.search(r"\bbsd\b", lower):
+        if re.search(r"\b(?:0|zero)[-\s]*clause\b", lower) or "0bsd" in lower:
             return "0BSD"
-        if "2" in lower or "simplified" in lower:
+        if re.search(r"\b(?:2|two)[-\s]*clause\b", lower) or "simplified" in lower or "freebsd" in lower:
             return "BSD-2-Clause"
         return "BSD-3-Clause"
     if re.search(r"\bmit\b", lower):
         return "MIT"
     if re.search(r"\bisc\b", lower):
         return "ISC"
-    if "python software foundation" in lower or "psf" in lower:
+    if "python software foundation" in lower or re.search(r"\bpsf\b", lower):
         return "PSF-2.0"
     if "unlicense" in lower:
         return "Unlicense"

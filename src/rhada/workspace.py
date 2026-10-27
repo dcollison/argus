@@ -30,7 +30,7 @@ def normalize_pkg_name(name: str) -> str:
 
 
 def parse_req_name(req_str: str) -> str:
-    """Extract a normalised package name from a PEP 508 requirement string."""
+    """Extract a normalised package name from a PEP 508 requirement string or direct URL/archive."""
     cleaned = req_str.strip()
     if not cleaned:
         return ""
@@ -38,6 +38,29 @@ def parse_req_name(req_str: str) -> str:
         req = Requirement(cleaned)
         return normalize_pkg_name(req.name)
     except InvalidRequirement:
+        # 1. Handle #egg=<name> fragments in direct URLs
+        if "#egg=" in cleaned:
+            egg_part = cleaned.split("#egg=", 1)[1].split("&", 1)[0].split("@", 1)[0].strip()
+            if egg_part:
+                return normalize_pkg_name(egg_part)
+
+        # 2. Handle archive or wheel files/paths (e.g. wheels/foo-1.0-py3-none-any.whl, dist/foo-1.0.tar.gz)
+        lower_cleaned = cleaned.lower()
+        for ext in (".whl", ".tar.gz", ".tar.bz2", ".tgz", ".zip"):
+            if lower_cleaned.endswith(ext):
+                leaf = Path(cleaned.split("@", 1)[-1].strip().split("#", 1)[0]).name
+                stem = re.sub(r"\.(?:whl|tar\.gz|tar\.bz2|tgz|zip)$", "", leaf, flags=re.IGNORECASE)
+                raw_cand = stem.split("-", 1)[0] if ext == ".whl" else (stem.rsplit("-", 1)[0] if "-" in stem else stem)
+                return normalize_pkg_name(raw_cand)
+
+        # 3. Handle VCS URLs without egg fragments (e.g. git+https://github.com/psf/requests.git)
+        if any(cleaned.startswith(proto) for proto in ("git+", "hg+", "svn+", "bzr+", "http://", "https://")):
+            cand = cleaned.split("@", 1)[0].split("#", 1)[0].rstrip("/")
+            last_segment = cand.split("/")[-1].removesuffix(".git")
+            if last_segment and not last_segment.startswith("-"):
+                return normalize_pkg_name(last_segment)
+
+        # 4. Standard fallback to leading identifier
         match = re.match(r"^([A-Za-z0-9_.-]+)", cleaned)
         return normalize_pkg_name(match.group(1)) if match else ""
 
@@ -129,12 +152,22 @@ def _read_text_safe(path: Path, max_bytes: int = 2_000_000) -> str:
         if b"\x00" in raw[:4096]:
             return ""
         try:
-            text = raw.decode("utf-8")
+            text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             text = raw.decode("latin-1", errors="replace")
         return text.replace("\r\n", "\n").replace("\r", "\n")
     except OSError:
         return ""
+
+
+def _is_safe_relative_path(base_dir: Path, target_path: Path) -> bool:
+    """Verify that target_path resolves strictly within base_dir to prevent directory traversal."""
+    try:
+        resolved_base = base_dir.resolve()
+        resolved_target = target_path.resolve()
+        return resolved_target.is_relative_to(resolved_base)
+    except (OSError, ValueError):
+        return False
 
 
 _BINARY_EXTENSIONS = frozenset({
@@ -547,7 +580,12 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
     if record_file.is_file():
         for line in _read_text_safe(record_file, max_bytes=5_000_000).splitlines():
             path_part = line.split(",", 1)[0].strip().replace("\\", "/")
-            if not path_part or path_part.startswith(("..", "/")):
+            if (
+                not path_part
+                or ":" in path_part
+                or path_part.startswith(("/", "\\"))
+                or ".." in path_part.split("/")
+            ):
                 continue
             first_seg = path_part.split("/", 1)[0]
             if (
@@ -658,7 +696,12 @@ def _discover_dist_native_libraries(
             parts = line.split(",")
             path_part = parts[0].strip().replace("\\", "/")
             hash_part = parts[1].strip() if len(parts) > 1 else ""
-            if not path_part or path_part.startswith(("..", "/")):
+            if (
+                not path_part
+                or ":" in path_part
+                or path_part.startswith(("/", "\\"))
+                or ".." in path_part.split("/")
+            ):
                 continue
             leaf = path_part.split("/")[-1]
             leaf_lower = leaf.lower()
@@ -685,6 +728,8 @@ def _discover_dist_native_libraries(
                 seen_files.add(leaf)
 
                 full_path = dist_info_dir.parent / path_part
+                if not _is_safe_relative_path(dist_info_dir.parent, full_path):
+                    continue
                 sha256_val = ""
                 if hash_part.startswith("sha256="):
                     sha256_val = hash_part.removeprefix("sha256=").strip()
@@ -828,11 +873,22 @@ def _discover_dist_native_libraries(
                     load_order_text = _read_text_safe(bin_file)
                     for dll_line in load_order_text.splitlines():
                         dll_leaf = dll_line.strip()
-                        if dll_leaf and dll_leaf not in seen_files:
+                        if (
+                            not dll_leaf
+                            or ":" in dll_leaf
+                            or dll_leaf.startswith(("/", "\\"))
+                            or ".." in dll_leaf
+                            or "/" in dll_leaf
+                            or "\\" in dll_leaf
+                        ):
+                            continue
+                        if dll_leaf not in seen_files:
                             seen_files.add(dll_leaf)
                             cand_dll_path = libs_dir / dll_leaf
                             if not cand_dll_path.is_file():
                                 cand_dll_path = sp_dir / dll_leaf
+                            if not _is_safe_relative_path(sp_dir, cand_dll_path):
+                                continue
                             from rhada.elf import (
                                 _infer_library_identity,
                                 _match_known_native_profile,
@@ -1049,40 +1105,43 @@ def _parse_setup_cfg(setup_cfg_path: Path) -> dict[str, Any]:
     """Read and parse setup.cfg using standard configparser."""
     if not setup_cfg_path.is_file():
         return {}
-    cp = configparser.ConfigParser()
+    cp = configparser.ConfigParser(interpolation=None)
     try:
         cp.read(setup_cfg_path, encoding="utf-8")
     except (configparser.Error, OSError, UnicodeDecodeError):
         return {}
 
     result: dict[str, Any] = {}
-    if cp.has_section("metadata"):
-        for field in ("name", "version", "description", "license", "licence"):
-            if cp.has_option("metadata", field):
-                result[field if field != "licence" else "license"] = cp.get("metadata", field).strip()
+    try:
+        if cp.has_section("metadata"):
+            for field in ("name", "version", "description", "license", "licence"):
+                if cp.has_option("metadata", field):
+                    result[field if field != "licence" else "license"] = cp.get("metadata", field, raw=True).strip()
 
-    deps: list[str] = []
-    if cp.has_section("options") and cp.has_option("options", "install_requires"):
-        raw_reqs = cp.get("options", "install_requires")
-        for line in raw_reqs.splitlines():
-            cleaned = line.strip()
-            if cleaned and not cleaned.startswith("#"):
-                deps.append(cleaned)
-    if deps:
-        result["dependencies"] = deps
+        deps: list[str] = []
+        if cp.has_section("options") and cp.has_option("options", "install_requires"):
+            raw_reqs = cp.get("options", "install_requires", raw=True)
+            for line in raw_reqs.splitlines():
+                cleaned = line.strip()
+                if cleaned and not cleaned.startswith("#"):
+                    deps.append(cleaned)
+        if deps:
+            result["dependencies"] = deps
 
-    if cp.has_section("options.extras_require"):
-        opt: dict[str, list[str]] = {}
-        for opt_name, raw_val in cp.items("options.extras_require"):
-            group_reqs = [
-                line.strip()
-                for line in raw_val.splitlines()
-                if line.strip() and not line.strip().startswith("#")
-            ]
-            if group_reqs:
-                opt[opt_name] = group_reqs
-        if opt:
-            result["optional-dependencies"] = opt
+        if cp.has_section("options.extras_require"):
+            opt: dict[str, list[str]] = {}
+            for opt_name, raw_val in cp.items("options.extras_require", raw=True):
+                group_reqs = [
+                    line.strip()
+                    for line in raw_val.splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                ]
+                if group_reqs:
+                    opt[opt_name] = group_reqs
+            if opt:
+                result["optional-dependencies"] = opt
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return {}
 
     return result
 

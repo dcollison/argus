@@ -369,7 +369,9 @@ def _match_known_native_profile(lib_key: str) -> NativeLibraryProfile | None:
         candidates.append(f"lib{key_clean}")
     for cand in candidates:
         for prefix, profile in _SORTED_KNOWN_NATIVE_LIBS:
-            if cand == prefix or cand.startswith(prefix):
+            if cand == prefix:
+                return profile
+            if cand.startswith(prefix) and len(cand) > len(prefix) and cand[len(prefix)] in "-_.0123456789":
                 return profile
     return None
 

@@ -353,3 +353,14 @@ def test_corporate_internal_license_detection_and_allowlist() -> None:
     assert len(findings_prop) == 0
 
 
+def test_normalize_single_license_heuristics_and_boundaries() -> None:
+    assert normalize_single_license("Simplified BSD License") == "BSD-2-Clause"
+    assert normalize_single_license("BSD 3-Clause License, 2010") == "BSD-3-Clause"
+    assert normalize_single_license("MIT (GPL-compatible)") == "MIT"
+    assert normalize_single_license("Apache Software License 1.1") == "Apache-1.1"
+    assert normalize_single_license("Python-2.0") == "Python-2.0"
+    assert normalize_single_license("BSL-1.0") == "BSL-1.0"
+    assert normalize_single_license("MIT-0") == "MIT-0"
+
+
+
