@@ -1202,27 +1202,28 @@ def _parse_setup_py(setup_py_path: Path) -> dict[str, Any]:
 
     constants: dict[str, Any] = {}
     for node in tree.body:
-        if isinstance(node, ast.Assign) and len(node.targets) == 1:
-            target = node.targets[0]
-            if isinstance(target, ast.Name):
-                if isinstance(node.value, ast.Constant):
-                    constants[target.id] = node.value.value
-                elif isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
-                    items = [
-                        elt.value
-                        for elt in node.value.elts
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                    ]
-                    if items:
-                        constants[target.id] = items
+        target_name = None
+        val_node = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            target_name = node.targets[0].id
+            val_node = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value:
+            target_name = node.target.id
+            val_node = node.value
+
+        if target_name and val_node:
+            with contextlib.suppress(ValueError, TypeError, SyntaxError):
+                constants[target_name] = ast.literal_eval(val_node)
 
     result: dict[str, Any] = {}
 
     def _resolve_val(val_node: ast.AST) -> Any:
-        if isinstance(val_node, ast.Constant):
-            return val_node.value
         if isinstance(val_node, ast.Name) and val_node.id in constants:
             return constants[val_node.id]
+        try:
+            return ast.literal_eval(val_node)
+        except (ValueError, TypeError, SyntaxError):
+            pass
         if isinstance(val_node, (ast.List, ast.Tuple, ast.Set)):
             elts = []
             for elt in val_node.elts:

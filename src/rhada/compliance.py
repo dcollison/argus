@@ -369,9 +369,76 @@ def evaluate_compliance(
                 )
             )
 
-    return findings
+    # 8. Cross-Component License Incompatibility Checks in Compiled Distributions
+    if mode == AuditMode.COMPILED_DIST:
+        active_bundled = [c for c in components if c.is_bundled]
 
+        # 8a. GPL-2.0-only incompatibility with Apache-2.0
+        # Under FSF analysis, Apache-2.0 patent termination (Sec. 3) and indemnity (Sec. 9) clauses
+        # are "further restrictions" prohibited by GPL-2.0 Section 6.
+        has_gpl2 = any(
+            c.license_info.spdx_id in ("GPL-2.0-only", "GPL-2.0")
+            for c in active_bundled
+        )
+        if has_gpl2:
+            findings.extend(
+                ComplianceFinding(
+                    rule_id="LIC-INCOMPATIBLE-COMBINATION",
+                    component_name=ac.name,
+                    component_version=ac.version,
+                    license_spdx=ac.license_info.spdx_id,
+                    risk_category=ac.license_info.risk_category,
+                    severity=Severity.CRITICAL,
+                    title="License incompatibility: Apache-2.0 statically linked with GPL-2.0-only",
+                    description=(
+                        f"Component '{ac.name}@{ac.version}' ({ac.license_info.spdx_id}) is bundled in the same "
+                        "compiled binary as a GPL-2.0-only component. Apache-2.0 patent termination "
+                        "and indemnity terms are considered 'further restrictions' prohibited by GPL-2.0 Section 6."
+                    ),
+                    remediation=(
+                        "Upgrade the GPL-2.0 component to GPL-3.0 (or GPL-2.0-or-later), "
+                        f"or replace the Apache-2.0 dependency '{ac.name}'."
+                    ),
+                )
+                for ac in active_bundled
+                if (
+                    ac.license_info.spdx_id == "Apache-2.0"
+                    or (not ac.license_info.is_dual_licensed and "Apache-2.0" in ac.license_info.license_choices)
+                )
+            )
 
+        # 8b. Strong Copyleft combined with Proprietary components
+        has_strong_copyleft = any(
+            c.license_info.risk_category == LicenseRiskCategory.STRONG_COPYLEFT
+            for c in active_bundled
+        )
+        if has_strong_copyleft:
+            findings.extend(
+                ComplianceFinding(
+                    rule_id="LIC-INCOMPATIBLE-PROPRIETARY-GPL",
+                    component_name=pc.name,
+                    component_version=pc.version,
+                    license_spdx=pc.license_info.spdx_id,
+                    risk_category=pc.license_info.risk_category,
+                    severity=Severity.CRITICAL,
+                    title=f"License conflict: Proprietary code bundled with Strong Copyleft ({pc.name})",
+                    description=(
+                        f"Proprietary component '{pc.name}@{pc.version}' is bundled into the same compiled "
+                        "distribution as strong copyleft (GPL) components. GPL requires the complete combined "
+                        "work to be licensed under the GPL."
+                    ),
+                    remediation=(
+                        f"Isolate '{pc.name}' into an independent process communicating over standard IPC, "
+                        "or replace the strong copyleft dependencies with permissive alternatives."
+                    ),
+                )
+                for pc in active_bundled
+                if pc.license_info.risk_category == LicenseRiskCategory.PROPRIETARY
+            )
+
+    return findings
+
+
 def generate_third_party_notices(report: AuditReport) -> str:
     """
     Generate a THIRD_PARTY_NOTICES attribution file suitable for
