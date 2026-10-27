@@ -49,6 +49,7 @@ from packageurl import PackageURL
 
 from rhada import __version__
 from rhada.models import AuditReport, Component, Severity
+from rhada.spdx import _SPDX_LICENSING
 
 HASH_ALG_CYCLONEDX: dict[str, HashAlgorithm] = {
     "SHA256": HashAlgorithm.SHA_256,
@@ -118,10 +119,15 @@ def _build_cyclonedx_licenses(comp: Component) -> list[License]:
         first_text = next(iter(lic.license_texts.values()))
         attached_text = AttachedText(content=first_text[:32_000], content_type="text/plain")
 
-    if (" OR " in spdx or " AND " in spdx or " WITH " in spdx) and is_expression(spdx):
-        return [LicenseExpression(value=spdx)]
+    is_compound = " OR " in spdx or " AND " in spdx or " WITH " in spdx
+    if is_compound:
+        if is_expression(spdx):
+            return [LicenseExpression(value=spdx)]
+        with contextlib.suppress(Exception):
+            _SPDX_LICENSING.parse(spdx, validate=False)
+            return [LicenseExpression(value=spdx)]
 
-    canonical_id = None if spdx.startswith("LicenseRef-") else fixup_id(spdx)
+    canonical_id = spdx if spdx.startswith("LicenseRef-") else fixup_id(spdx)
     if canonical_id:
         return [DisjunctiveLicense(id=canonical_id, text=attached_text)]
     return [DisjunctiveLicense(name=spdx, text=attached_text)]
@@ -287,6 +293,44 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
     return json.loads(raw_json)
 
 
+def _format_spdx_originator(author: str = "") -> str | None:
+    """Format the SPDX 2.3 Package Originator field per Clause 7.5."""
+    raw_author = author.strip()
+    if not raw_author:
+        return None
+    if raw_author.startswith(("Person:", "Organization:")):
+        prefix, name = raw_author.split(":", 1)
+        prefix = prefix.strip()
+        name = name.strip()
+    else:
+        org_markers = (
+            "foundation",
+            "corp",
+            "corporation",
+            "inc",
+            "llc",
+            "ltd",
+            "team",
+            "group",
+            "project",
+            "software",
+            "labs",
+            "company",
+            "association",
+            "consortium",
+        )
+        is_org = any(re.search(rf"\b{re.escape(m)}\b", raw_author, re.IGNORECASE) for m in org_markers)
+        prefix = "Organization" if is_org else "Person"
+        name = raw_author
+
+    m_email = re.search(r"<([^>]+)>", name)
+    if m_email:
+        clean_name = name[:m_email.start()].strip()
+        email = m_email.group(1).strip()
+        return f"{prefix}: {clean_name} ({email})" if clean_name else f"{prefix}: ({email})"
+    return f"{prefix}: {name}"
+
+
 def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
     """Generate an SPDX 2.3 JSON Software Bill of Materials."""
     doc_uuid = uuid.uuid4()
@@ -378,8 +422,9 @@ def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
         }
         if comp.description:
             pkg_entry["summary"] = comp.description
-        if comp.author:
-            pkg_entry["originator"] = f"Person: {comp.author}"
+        originator_val = _format_spdx_originator(comp.author)
+        if originator_val:
+            pkg_entry["originator"] = originator_val
         if checksums:
             pkg_entry["checksums"] = checksums
 

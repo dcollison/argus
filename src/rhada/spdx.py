@@ -1246,7 +1246,18 @@ def evaluate_spdx_allowlist(spdx_expr: str, allowed_upper: set[str]) -> bool:
             return any(_eval_node(arg) for arg in node.args)
         if isinstance(node, AND):
             return all(_eval_node(arg) for arg in node.args)
-        if isinstance(node, (LicenseSymbol, LicenseWithExceptionSymbol)):
+        if isinstance(node, LicenseWithExceptionSymbol):
+            raw_tok = node.render()
+            base_tok = node.license_symbol.render()
+            norm = normalize_single_license(raw_tok)
+            base_norm = normalize_single_license(base_tok)
+            return (
+                raw_tok.upper() in allowed_upper
+                or norm.upper() in allowed_upper
+                or base_tok.upper() in allowed_upper
+                or base_norm.upper() in allowed_upper
+            )
+        if isinstance(node, LicenseSymbol):
             raw_tok = node.render()
             norm = normalize_single_license(raw_tok)
             return norm.upper() in allowed_upper or raw_tok.upper() in allowed_upper
@@ -1282,7 +1293,18 @@ def evaluate_spdx_denylist(spdx_expr: str, denied_upper: set[str]) -> bool:
             return all(_is_denied(arg) for arg in node.args)
         if isinstance(node, AND):
             return any(_is_denied(arg) for arg in node.args)
-        if isinstance(node, (LicenseSymbol, LicenseWithExceptionSymbol)):
+        if isinstance(node, LicenseWithExceptionSymbol):
+            raw_tok = node.render()
+            base_tok = node.license_symbol.render()
+            norm = normalize_single_license(raw_tok)
+            base_norm = normalize_single_license(base_tok)
+            return (
+                raw_tok.upper() in denied_upper
+                or norm.upper() in denied_upper
+                or base_tok.upper() in denied_upper
+                or base_norm.upper() in denied_upper
+            )
+        if isinstance(node, LicenseSymbol):
             raw_tok = node.render()
             norm = normalize_single_license(raw_tok)
             return norm.upper() in denied_upper or raw_tok.upper() in denied_upper

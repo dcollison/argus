@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rhada"
-version = "0.0.2"
+version = "0.0.3"
 description = "Legal compliance, SBOM generation, binary linkage verification, and security vulnerability auditor for Python source workspaces and compiled Nuitka/PyInstaller distributions."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -20,6 +20,8 @@ from rhada.models import (
 )
 from rhada.spdx import (
     build_license_info,
+    evaluate_spdx_allowlist,
+    evaluate_spdx_denylist,
     extract_copyright_notices,
     infer_spdx_from_license_text,
     normalize_single_license,
@@ -477,3 +479,15 @@ def test_cross_component_license_incompatibility_detection() -> None:
         config=AuditConfig(allowed_licenses={"Proprietary"}),
     )
     assert "LIC-INCOMPATIBLE-PROPRIETARY-GPL" in {f.rule_id for f in findings_prop}
+
+
+def test_evaluate_spdx_denylist_and_allowlist_with_exceptions() -> None:
+    # Denylist: forbidding base license GPL-3.0-only must catch GPL-3.0-only WITH Classpath-exception-2.0
+    assert evaluate_spdx_denylist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY"})
+    assert evaluate_spdx_denylist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY WITH CLASSPATH-EXCEPTION-2.0"})
+    # Permissive MIT is not denied
+    assert not evaluate_spdx_denylist("MIT", {"GPL-3.0-ONLY"})
+
+    # Allowlist: allowing base license allows WITH exception
+    assert evaluate_spdx_allowlist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY"})
+    assert evaluate_spdx_allowlist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY WITH CLASSPATH-EXCEPTION-2.0"})
