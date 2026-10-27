@@ -406,3 +406,74 @@ def test_extract_copyright_notices_author_fallback_preservation() -> None:
     )
     assert len(result_dup) == 1
     assert result_dup[0] == "Copyright (c) 2023 Alice Smith"
+
+
+def test_cross_component_license_incompatibility_detection() -> None:
+    # 1. Apache-2.0 and GPL-2.0-only in compiled distribution -> CRITICAL conflict
+    c_apache = Component(
+        name="apache-lib",
+        version="2.0.0",
+        is_bundled=True,
+        license_info=build_license_info("Apache-2.0"),
+    )
+    c_gpl2 = Component(
+        name="gpl2-lib",
+        version="1.0.0",
+        is_bundled=True,
+        license_info=build_license_info("GPL-2.0-only"),
+    )
+    findings = evaluate_compliance(
+        [c_apache, c_gpl2],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        config=AuditConfig(),
+    )
+    rule_ids = {f.rule_id for f in findings}
+    assert "LIC-INCOMPATIBLE-COMBINATION" in rule_ids
+    incomp_finding = next(f for f in findings if f.rule_id == "LIC-INCOMPATIBLE-COMBINATION")
+    assert incomp_finding.severity == Severity.CRITICAL
+
+    # 2. Apache-2.0 and GPL-3.0-only -> Compatible (no LIC-INCOMPATIBLE-COMBINATION)
+    c_gpl3 = Component(
+        name="gpl3-lib",
+        version="3.0.0",
+        is_bundled=True,
+        license_info=build_license_info("GPL-3.0-only"),
+    )
+    findings_gpl3 = evaluate_compliance(
+        [c_apache, c_gpl3],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        config=AuditConfig(),
+    )
+    assert "LIC-INCOMPATIBLE-COMBINATION" not in {f.rule_id for f in findings_gpl3}
+
+    # 3. Dual-licensed Apache-2.0 OR MIT with GPL-2.0-only -> Compatible via MIT choice
+    c_dual = Component(
+        name="dual-lib",
+        version="1.5.0",
+        is_bundled=True,
+        license_info=build_license_info("Apache-2.0 OR MIT"),
+    )
+    findings_dual = evaluate_compliance(
+        [c_dual, c_gpl2],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        config=AuditConfig(),
+    )
+    assert "LIC-INCOMPATIBLE-COMBINATION" not in {f.rule_id for f in findings_dual}
+
+    # 4. Proprietary component bundled with Strong Copyleft in compiled binary -> Conflict
+    c_prop = Component(
+        name="secret-core",
+        version="1.0.0",
+        is_bundled=True,
+        license_info=build_license_info("Proprietary"),
+    )
+    findings_prop = evaluate_compliance(
+        [c_prop, c_gpl3],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        config=AuditConfig(allowed_licenses={"Proprietary"}),
+    )
+    assert "LIC-INCOMPATIBLE-PROPRIETARY-GPL" in {f.rule_id for f in findings_prop}

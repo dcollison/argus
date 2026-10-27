@@ -797,3 +797,68 @@ def test_inspect_workspace_nuitka_directives_and_dist_correlation(tmp_path: Path
     active, _excluded = correlate_workspace_and_dist(ws, dist_res)
     active_names = {c.name for c in active}
     assert "cryptography" in active_names
+
+
+def test_build_resolved_dependency_version_sanitization() -> None:
+    from packaging.version import Version
+
+    from rhada.models import Component, ComponentType
+    from rhada.osv import _build_resolved_dependency
+
+    # Standard clean semver
+    c1 = Component(name="requests", version="2.31.0", component_type=ComponentType.PYTHON_PACKAGE)
+    rd1 = _build_resolved_dependency(c1)
+    assert rd1 is not None
+    assert rd1.version == Version("2.31.0")
+
+    # Leading 'v'
+    c2 = Component(name="urllib3", version="v1.26.15", component_type=ComponentType.PYTHON_PACKAGE)
+    rd2 = _build_resolved_dependency(c2)
+    assert rd2 is not None
+    assert rd2.version == Version("1.26.15")
+
+    # Non-PEP-440 suffix or snapshot (e.g. 2.1.0-alpha+build.123)
+    c3 = Component(name="custom-pkg", version="2.1.0-custom-snapshot", component_type=ComponentType.PYTHON_PACKAGE)
+    rd3 = _build_resolved_dependency(c3)
+    assert rd3 is not None
+    assert rd3.version == Version("2.1.0")
+
+    # Pure date version
+    c4 = Component(name="date-pkg", version="20240101", component_type=ComponentType.PYTHON_PACKAGE)
+    rd4 = _build_resolved_dependency(c4)
+    assert rd4 is not None
+    assert rd4.version == Version("20240101")
+
+    # Unknown or empty version
+    c5 = Component(name="unknown-pkg", version="unknown", component_type=ComponentType.PYTHON_PACKAGE)
+    assert _build_resolved_dependency(c5) is None
+
+
+def test_parse_setup_py_annotated_assignments_and_literals(tmp_path: Path) -> None:
+    from rhada.workspace import _parse_setup_py
+
+    setup_py = tmp_path / "setup.py"
+    setup_py.write_text(
+        "from setuptools import setup\n\n"
+        "NAME: str = 'my-annotated-tool'\n"
+        "VERSION: str = '3.4.1'\n"
+        "DESCRIPTION = 'Modern tool with annotated setup.py'\n"
+        "REQUIREMENTS = ['click>=8.0', 'pydantic>=2.0']\n\n"
+        "setup(\n"
+        "    name=NAME,\n"
+        "    version=VERSION,\n"
+        "    description=DESCRIPTION,\n"
+        "    license='MIT',\n"
+        "    install_requires=REQUIREMENTS,\n"
+        "    extras_require={'dev': ['pytest', 'ruff']},\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    data = _parse_setup_py(setup_py)
+    assert data["name"] == "my-annotated-tool"
+    assert data["version"] == "3.4.1"
+    assert data["description"] == "Modern tool with annotated setup.py"
+    assert data["license"] == "MIT"
+    assert data["dependencies"] == ["click>=8.0", "pydantic>=2.0"]
+    assert data["optional-dependencies"]["dev"] == ["pytest", "ruff"]
