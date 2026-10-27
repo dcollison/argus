@@ -178,6 +178,11 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
                 ext_refs.append(
                     ExternalReference(type=ExternalReferenceType.WEBSITE, url=XsUri(comp.homepage.strip()))
                 )
+        if _is_valid_http_url(comp.source_url) and comp.source_url.strip() != comp.homepage.strip():
+            with contextlib.suppress(ValueError):
+                ext_refs.append(
+                    ExternalReference(type=ExternalReferenceType.VCS, url=XsUri(comp.source_url.strip()))
+                )
 
         props = [
             Property(name="rhada:component_type", value=comp.component_type.value),
@@ -245,7 +250,12 @@ def generate_cyclonedx_sbom(report: AuditReport) -> dict[str, Any]:
     for comp, cdx_comp in comp_cdx_pairs:
         for v in comp.vulnerabilities:
             score_dec = Decimal(f"{v.cvss_score:.1f}") if v.cvss_score is not None else None
-            method = VulnerabilityScoreSource.CVSS_V3 if v.cvss_score is not None or v.cvss_vector else None
+            if v.cvss_vector and v.cvss_vector.upper().startswith("CVSS:4"):
+                method = VulnerabilityScoreSource.CVSS_V4
+            elif v.cvss_score is not None or v.cvss_vector:
+                method = VulnerabilityScoreSource.CVSS_V3
+            else:
+                method = None
             rating = VulnerabilityRating(
                 severity=SEVERITY_TO_CYCLONEDX.get(v.severity, VulnerabilitySeverity.MEDIUM),
                 score=score_dec,
@@ -342,7 +352,12 @@ def generate_spdx_sbom(report: AuditReport) -> dict[str, Any]:
             if spdx_alg and digest:
                 checksums.append({"algorithm": spdx_alg, "checksumValue": digest})
 
-        download_loc = comp.homepage.strip() if _is_valid_http_url(comp.homepage) else "NOASSERTION"
+        download_loc = "NOASSERTION"
+        if _is_valid_http_url(comp.source_url):
+            download_loc = comp.source_url.strip()
+        elif _is_valid_http_url(comp.homepage):
+            download_loc = comp.homepage.strip()
+
         pkg_entry: dict[str, Any] = {
             "SPDXID": spdx_id,
             "name": comp.name,

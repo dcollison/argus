@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import ast
+import configparser
 import contextlib
 import email
+import os
 import re
+import shlex
+import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +33,7 @@ def normalize_pkg_name(name: str) -> str:
 
 
 def parse_req_name(req_str: str) -> str:
-    """Extract a normalised package name from a PEP 508 requirement string."""
+    """Extract a normalised package name from a PEP 508 requirement string or direct URL/archive."""
     cleaned = req_str.strip()
     if not cleaned:
         return ""
@@ -36,6 +41,29 @@ def parse_req_name(req_str: str) -> str:
         req = Requirement(cleaned)
         return normalize_pkg_name(req.name)
     except InvalidRequirement:
+        # 1. Handle #egg=<name> fragments in direct URLs
+        if "#egg=" in cleaned:
+            egg_part = cleaned.split("#egg=", 1)[1].split("&", 1)[0].split("@", 1)[0].strip()
+            if egg_part:
+                return normalize_pkg_name(egg_part)
+
+        # 2. Handle archive or wheel files/paths (e.g. wheels/foo-1.0-py3-none-any.whl, dist/foo-1.0.tar.gz)
+        lower_cleaned = cleaned.lower()
+        for ext in (".whl", ".tar.gz", ".tar.bz2", ".tgz", ".zip"):
+            if lower_cleaned.endswith(ext):
+                leaf = Path(cleaned.split("@", 1)[-1].strip().split("#", 1)[0]).name
+                stem = re.sub(r"\.(?:whl|tar\.gz|tar\.bz2|tgz|zip)$", "", leaf, flags=re.IGNORECASE)
+                raw_cand = stem.split("-", 1)[0] if ext == ".whl" else (stem.rsplit("-", 1)[0] if "-" in stem else stem)
+                return normalize_pkg_name(raw_cand)
+
+        # 3. Handle VCS URLs without egg fragments (e.g. git+https://github.com/psf/requests.git)
+        if any(cleaned.startswith(proto) for proto in ("git+", "hg+", "svn+", "bzr+", "http://", "https://")):
+            cand = cleaned.split("@", 1)[0].split("#", 1)[0].rstrip("/")
+            last_segment = cand.split("/")[-1].removesuffix(".git")
+            if last_segment and not last_segment.startswith("-"):
+                return normalize_pkg_name(last_segment)
+
+        # 4. Standard fallback to leading identifier
         match = re.match(r"^([A-Za-z0-9_.-]+)", cleaned)
         return normalize_pkg_name(match.group(1)) if match else ""
 
@@ -56,6 +84,7 @@ class WorkspaceMetadata:
     native_components: list[Component] = field(default_factory=list)
     package_libraries: dict[str, list[str]] = field(default_factory=dict)
     elf_binaries: list[ElfBinaryInfo] = field(default_factory=list)
+    nuitka_directives: dict[str, list[str]] = field(default_factory=dict)
 
 
 LICENSE_FILE_PATTERNS = (
@@ -87,7 +116,7 @@ def _find_site_packages_dirs(project_path: Path) -> list[Path]:
             seen_resolved.add(resolved)
             candidates.append(path)
 
-    venv_names = [".venv", "venv", ".env"]
+    venv_names = [".venv", "venv", ".env", "env"]
     search_roots = [project_path]
     if project_path.parent != project_path:
         search_roots.append(project_path.parent)
@@ -127,12 +156,22 @@ def _read_text_safe(path: Path, max_bytes: int = 2_000_000) -> str:
         if b"\x00" in raw[:4096]:
             return ""
         try:
-            text = raw.decode("utf-8")
+            text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
             text = raw.decode("latin-1", errors="replace")
         return text.replace("\r\n", "\n").replace("\r", "\n")
     except OSError:
         return ""
+
+
+def _is_safe_relative_path(base_dir: Path, target_path: Path) -> bool:
+    """Verify that target_path resolves strictly within base_dir to prevent directory traversal."""
+    try:
+        resolved_base = base_dir.resolve()
+        resolved_target = target_path.resolve()
+        return resolved_target.is_relative_to(resolved_base)
+    except (OSError, ValueError):
+        return False
 
 
 _BINARY_EXTENSIONS = frozenset({
@@ -419,16 +458,33 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
         if version == "unknown" and parsed_ver != "unknown":
             version = parsed_ver
 
+    norm_pkg = normalize_pkg_name(name)
     summary = _clean_metadata_field(msg.get("Summary"))
     homepage = _clean_metadata_field(msg.get("Home-page"))
+    source_url = _clean_metadata_field(msg.get("Download-URL"))
+
+    for purl_header in msg.get_all("Project-URL") or []:
+        if "," in purl_header:
+            label, url = purl_header.split(",", 1)
+            cand_url = _clean_metadata_field(url)
+            if not cand_url:
+                continue
+            lbl_lower = label.lower()
+            if not source_url and any(k in lbl_lower for k in ("source", "repository", "repo", "code", "github", "gitlab", "bitbucket")):
+                source_url = cand_url
+            if not homepage and any(k in lbl_lower for k in ("home", "website", "documentation", "docs", "url")):
+                homepage = cand_url
+
+    if not source_url:
+        if homepage and any(h in homepage.lower() for h in ("github.com", "gitlab.com", "bitbucket.org")):
+            source_url = homepage
+        elif norm_pkg and version and version != "unknown":
+            source_url = f"https://pypi.org/project/{norm_pkg}/{version}/#files"
+        elif norm_pkg:
+            source_url = f"https://pypi.org/project/{norm_pkg}/"
+
     if not homepage:
-        for purl_header in msg.get_all("Project-URL") or []:
-            if "," in purl_header:
-                label, url = purl_header.split(",", 1)
-                cand_url = _clean_metadata_field(url)
-                if cand_url and any(k in label.lower() for k in ("home", "repository", "source", "url")):
-                    homepage = cand_url
-                    break
+        homepage = source_url or (f"https://pypi.org/project/{norm_pkg}/" if norm_pkg else "")
 
     author = _clean_metadata_field(msg.get("Author")) or _clean_metadata_field(msg.get("Maintainer"))
     author_email = _clean_metadata_field(msg.get("Author-email")) or _clean_metadata_field(msg.get("Maintainer-email"))
@@ -528,7 +584,12 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
     if record_file.is_file():
         for line in _read_text_safe(record_file, max_bytes=5_000_000).splitlines():
             path_part = line.split(",", 1)[0].strip().replace("\\", "/")
-            if not path_part or path_part.startswith(("..", "/")):
+            if (
+                not path_part
+                or ":" in path_part
+                or path_part.startswith(("/", "\\"))
+                or ".." in path_part.split("/")
+            ):
                 continue
             first_seg = path_part.split("/", 1)[0]
             if (
@@ -611,6 +672,7 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
         ecosystem="PyPI",
         description=summary,
         homepage=homepage,
+        source_url=source_url,
         author=author or author_email,
         license_info=lic_info,
         dependencies=deps,
@@ -638,7 +700,12 @@ def _discover_dist_native_libraries(
             parts = line.split(",")
             path_part = parts[0].strip().replace("\\", "/")
             hash_part = parts[1].strip() if len(parts) > 1 else ""
-            if not path_part or path_part.startswith(("..", "/")):
+            if (
+                not path_part
+                or ":" in path_part
+                or path_part.startswith(("/", "\\"))
+                or ".." in path_part.split("/")
+            ):
                 continue
             leaf = path_part.split("/")[-1]
             leaf_lower = leaf.lower()
@@ -665,6 +732,8 @@ def _discover_dist_native_libraries(
                 seen_files.add(leaf)
 
                 full_path = dist_info_dir.parent / path_part
+                if not _is_safe_relative_path(dist_info_dir.parent, full_path):
+                    continue
                 sha256_val = ""
                 if hash_part.startswith("sha256="):
                     sha256_val = hash_part.removeprefix("sha256=").strip()
@@ -760,6 +829,7 @@ def _discover_dist_native_libraries(
                         ecosystem=ecosystem,
                         description=f"Bundled native shared library ({leaf}, x86_64)",
                         homepage=homepage,
+                        source_url=getattr(profile, "source_url", "") or homepage,
                         license_info=lic_info,
                         hashes={"SHA256": sha256_val} if sha256_val else {},
                         bundled_files=[str(full_path)],
@@ -807,11 +877,22 @@ def _discover_dist_native_libraries(
                     load_order_text = _read_text_safe(bin_file)
                     for dll_line in load_order_text.splitlines():
                         dll_leaf = dll_line.strip()
-                        if dll_leaf and dll_leaf not in seen_files:
+                        if (
+                            not dll_leaf
+                            or ":" in dll_leaf
+                            or dll_leaf.startswith(("/", "\\"))
+                            or ".." in dll_leaf
+                            or "/" in dll_leaf
+                            or "\\" in dll_leaf
+                        ):
+                            continue
+                        if dll_leaf not in seen_files:
                             seen_files.add(dll_leaf)
                             cand_dll_path = libs_dir / dll_leaf
                             if not cand_dll_path.is_file():
                                 cand_dll_path = sp_dir / dll_leaf
+                            if not _is_safe_relative_path(sp_dir, cand_dll_path):
+                                continue
                             from rhada.elf import (
                                 _infer_library_identity,
                                 _match_known_native_profile,
@@ -912,6 +993,180 @@ def _discover_dist_native_libraries(
     return results
 
 
+NUITKA_DIRECTIVE_RE = re.compile(
+    r"^\s*#\s*nuitka-project(?:-if\s+(.*?))?:\s*(.*)$",
+    re.IGNORECASE,
+)
+NUITKA_CONT_RE = re.compile(
+    r"^\s*#\s{2,}(.*)$",
+)
+
+
+def _eval_nuitka_condition(condition_str: str) -> bool:
+    """Safely evaluate a Nuitka conditional directive expression without arbitrary code execution."""
+    cleaned = condition_str.strip()
+    if not cleaned:
+        return True
+    try:
+        expr_ast = ast.parse(cleaned, mode="eval")
+    except SyntaxError:
+        return True
+
+    safe_names = {
+        "sys": sys,
+        "os": os,
+        "True": True,
+        "False": False,
+    }
+
+    class SafeEvalVisitor(ast.NodeVisitor):
+        def visit(self, node: ast.AST) -> Any:
+            if isinstance(node, ast.Expression):
+                return self.visit(node.body)
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                if node.id in safe_names:
+                    return safe_names[node.id]
+                raise ValueError(f"Unsafe name: {node.id}")
+            if isinstance(node, ast.Attribute):
+                val = self.visit(node.value)
+                if node.attr in {"platform", "name", "version_info"}:
+                    return getattr(val, node.attr)
+                raise ValueError(f"Unsafe attribute: {node.attr}")
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                return not self.visit(node.operand)
+            if isinstance(node, ast.BoolOp):
+                vals = [self.visit(v) for v in node.values]
+                if isinstance(node.op, ast.And):
+                    return all(vals)
+                if isinstance(node.op, ast.Or):
+                    return any(vals)
+            if isinstance(node, ast.Compare):
+                left = self.visit(node.left)
+                for op, comp_node in zip(node.ops, node.comparators, strict=False):
+                    right = self.visit(comp_node)
+                    if isinstance(op, ast.Eq) and left != right:
+                        return False
+                    if isinstance(op, ast.NotEq) and left == right:
+                        return False
+                    if isinstance(op, ast.In) and left not in right:
+                        return False
+                    if isinstance(op, ast.NotIn) and left in right:
+                        return False
+                    if isinstance(op, ast.Lt) and not (left < right):
+                        return False
+                    if isinstance(op, ast.LtE) and not (left <= right):
+                        return False
+                    if isinstance(op, ast.Gt) and not (left > right):
+                        return False
+                    if isinstance(op, ast.GtE) and not (left >= right):
+                        return False
+                    left = right
+                return True
+            raise ValueError(f"Unsupported AST node: {type(node)}")
+
+        def generic_visit(self, node: ast.AST) -> Any:
+            raise ValueError(f"Unsupported AST node: {type(node)}")
+
+    try:
+        return bool(SafeEvalVisitor().visit(expr_ast))
+    except (ValueError, TypeError, AttributeError, SyntaxError):
+        # Default to True on dynamic/unparseable conditions to avoid dropping dependencies in compliance checks
+        return True
+
+
+def _parse_nuitka_tokens(tokens: list[str], directives: dict[str, list[str]]) -> None:
+    """Parse tokenized Nuitka CLI options into directive categories."""
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        directives["raw_options"].append(token)
+        for flag, key in (
+            ("--include-package", "include_packages"),
+            ("--include-module", "include_modules"),
+            ("--include-package-data", "include_package_data"),
+            ("--include-data-dir", "include_data_dirs"),
+            ("--include-data-files", "include_data_files"),
+            ("--enable-plugin", "plugins"),
+            ("--nofollow-import-to", "nofollow_imports"),
+        ):
+            if token.startswith(f"{flag}="):
+                val = token[len(flag) + 1:].strip()
+                if val and val not in directives[key]:
+                    directives[key].append(val)
+                break
+            elif token == flag and i + 1 < len(tokens):
+                i += 1
+                val = tokens[i].strip()
+                directives["raw_options"].append(val)
+                if val and val not in directives[key]:
+                    directives[key].append(val)
+                break
+        i += 1
+
+
+def parse_nuitka_source_directives(file_path: Path) -> dict[str, list[str]]:
+    """
+    Parse Nuitka project directives (# nuitka-project: and # nuitka-project-if:)
+    from a Python script, safely evaluating platform conditionals.
+    """
+    directives: dict[str, list[str]] = {
+        "include_packages": [],
+        "include_modules": [],
+        "include_package_data": [],
+        "include_data_dirs": [],
+        "include_data_files": [],
+        "plugins": [],
+        "nofollow_imports": [],
+        "raw_options": [],
+    }
+    if not file_path.is_file():
+        return directives
+
+    content = _read_text_safe(file_path, max_bytes=512_000)
+    if not content or "nuitka-project" not in content:
+        return directives
+
+    in_active_block = False
+    active_condition_met = True
+
+    for line in content.splitlines():
+        line_stripped = line.strip()
+        if not line_stripped.startswith("#"):
+            in_active_block = False
+            continue
+
+        m_dir = NUITKA_DIRECTIVE_RE.match(line)
+        if m_dir:
+            cond_str = m_dir.group(1)
+            rem = m_dir.group(2).strip()
+            active_condition_met = _eval_nuitka_condition(cond_str) if cond_str else True
+            in_active_block = True
+            if active_condition_met and rem:
+                try:
+                    tokens = shlex.split(rem)
+                    _parse_nuitka_tokens(tokens, directives)
+                except ValueError:
+                    pass
+            continue
+
+        if in_active_block and active_condition_met:
+            m_cont = NUITKA_CONT_RE.match(line)
+            if m_cont:
+                cont_text = m_cont.group(1).strip()
+                if cont_text:
+                    try:
+                        tokens = shlex.split(cont_text)
+                        _parse_nuitka_tokens(tokens, directives)
+                    except ValueError:
+                        pass
+            else:
+                in_active_block = False
+
+    return directives
+
+
 def _parse_pyproject_toml(pyproject_path: Path) -> dict[str, Any]:
     """Read and parse pyproject.toml."""
     if not pyproject_path.is_file():
@@ -932,13 +1187,169 @@ def _parse_uv_lock(uv_lock_path: Path) -> dict[str, Any]:
         return {}
 
 
+def _parse_setup_py(setup_py_path: Path) -> dict[str, Any]:
+    """
+    Safely parse setup.py using Python AST without executing untrusted code.
+    Extracts name, version, description, license, install_requires, and extras_require.
+    """
+    if not setup_py_path.is_file():
+        return {}
+    try:
+        source = _read_text_safe(setup_py_path, max_bytes=1_000_000)
+        tree = ast.parse(source, filename=str(setup_py_path))
+    except (SyntaxError, UnicodeDecodeError, OSError, ValueError):
+        return {}
+
+    constants: dict[str, Any] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, ast.Name):
+                if isinstance(node.value, ast.Constant):
+                    constants[target.id] = node.value.value
+                elif isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                    items = [
+                        elt.value
+                        for elt in node.value.elts
+                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                    ]
+                    if items:
+                        constants[target.id] = items
+
+    result: dict[str, Any] = {}
+
+    def _resolve_val(val_node: ast.AST) -> Any:
+        if isinstance(val_node, ast.Constant):
+            return val_node.value
+        if isinstance(val_node, ast.Name) and val_node.id in constants:
+            return constants[val_node.id]
+        if isinstance(val_node, (ast.List, ast.Tuple, ast.Set)):
+            elts = []
+            for elt in val_node.elts:
+                v = _resolve_val(elt)
+                if isinstance(v, str):
+                    elts.append(v)
+            return elts
+        if isinstance(val_node, ast.Dict):
+            d = {}
+            for k, v in zip(val_node.keys, val_node.values, strict=False):
+                k_val = _resolve_val(k) if k else None
+                v_val = _resolve_val(v)
+                if isinstance(k_val, str):
+                    d[k_val] = v_val
+            return d
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func_name = ""
+            if isinstance(node.func, ast.Name):
+                func_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+            if func_name != "setup":
+                continue
+
+            for kw in node.keywords:
+                if not kw.arg:
+                    continue
+                val = _resolve_val(kw.value)
+                if val is None:
+                    continue
+
+                if kw.arg == "name" and isinstance(val, str):
+                    result["name"] = val
+                elif kw.arg == "version" and isinstance(val, (str, int, float)):
+                    result["version"] = str(val)
+                elif kw.arg == "description" and isinstance(val, str):
+                    result["description"] = val
+                elif kw.arg in ("license", "licence") and isinstance(val, str):
+                    result["license"] = val
+                elif kw.arg == "install_requires" and isinstance(val, list):
+                    result["dependencies"] = [str(x) for x in val if isinstance(x, str)]
+                elif kw.arg == "extras_require" and isinstance(val, dict):
+                    opt: dict[str, list[str]] = {}
+                    for gname, greqs in val.items():
+                        if isinstance(greqs, list):
+                            opt[gname] = [str(x) for x in greqs if isinstance(x, str)]
+                    result["optional-dependencies"] = opt
+                elif kw.arg == "classifiers" and isinstance(val, list):
+                    result["classifiers"] = [str(x) for x in val if isinstance(x, str)]
+
+    return result
+
+
+def _parse_setup_cfg(setup_cfg_path: Path) -> dict[str, Any]:
+    """Read and parse setup.cfg using standard configparser."""
+    if not setup_cfg_path.is_file():
+        return {}
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(setup_cfg_path, encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return {}
+
+    result: dict[str, Any] = {}
+    try:
+        if cp.has_section("metadata"):
+            for field in ("name", "version", "description", "license", "licence"):
+                if cp.has_option("metadata", field):
+                    result[field if field != "licence" else "license"] = cp.get("metadata", field, raw=True).strip()
+
+        deps: list[str] = []
+        if cp.has_section("options") and cp.has_option("options", "install_requires"):
+            raw_reqs = cp.get("options", "install_requires", raw=True)
+            for line in raw_reqs.splitlines():
+                cleaned = line.strip()
+                if cleaned and not cleaned.startswith("#"):
+                    deps.append(cleaned)
+        if deps:
+            result["dependencies"] = deps
+
+        if cp.has_section("options.extras_require"):
+            opt: dict[str, list[str]] = {}
+            for opt_name, raw_val in cp.items("options.extras_require", raw=True):
+                group_reqs = [
+                    line.strip()
+                    for line in raw_val.splitlines()
+                    if line.strip() and not line.strip().startswith("#")
+                ]
+                if group_reqs:
+                    opt[opt_name] = group_reqs
+            if opt:
+                result["optional-dependencies"] = opt
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return {}
+
+    return result
+
+
+def _parse_requirements_txt(req_path: Path) -> list[str]:
+    """Parse standard requirements.txt file, filtering comments and pip options."""
+    if not req_path.is_file():
+        return []
+    reqs: list[str] = []
+    try:
+        text = _read_text_safe(req_path, max_bytes=1_000_000)
+    except OSError:
+        return []
+    for line in text.splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned.startswith("#"):
+            continue
+        if cleaned.startswith(("-", "--")):
+            continue
+        reqs.append(cleaned)
+    return reqs
+
+
 def inspect_workspace(project_path: Path, include_dev: bool = False) -> WorkspaceMetadata:
     """
     Inspect a Python project's uv workspace (pyproject.toml, uv.lock, and .venv)
     to build a complete map of runtime and development dependencies, licences, and modules.
     """
     project_path = project_path.resolve()
-    ws = WorkspaceMetadata(root_path=project_path)
+    ws = WorkspaceMetadata(root_path=project_path, project_name=project_path.name)
 
     pyproject_file = project_path / "pyproject.toml"
     uv_lock_file = project_path / "uv.lock"
@@ -948,7 +1359,7 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
     pyproject_data = _parse_pyproject_toml(pyproject_file)
     project_table = pyproject_data.get("project", {})
     has_explicit_project_metadata = isinstance(project_table, dict) and bool(project_table)
-    if isinstance(project_table, dict):
+    if isinstance(project_table, dict) and has_explicit_project_metadata:
         ws.project_name = normalize_pkg_name(project_table.get("name", project_path.name)) or project_path.name
         ws.project_version = str(project_table.get("version", "0.0.1"))
         ws.project_description = str(project_table.get("description", ""))
@@ -973,6 +1384,55 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                             dep_name = parse_req_name(req_str)
                             if dep_name and group_name.lower() in {"dev", "test", "testing", "lint", "build", "docs"}:
                                 ws.direct_dev_deps.add(dep_name)
+    else:
+        # Fall back to legacy setup.cfg and setup.py
+        setup_cfg_data = _parse_setup_cfg(project_path / "setup.cfg")
+        setup_py_data = _parse_setup_py(project_path / "setup.py")
+        legacy_data = {**setup_py_data, **setup_cfg_data}
+
+        if legacy_data:
+            has_explicit_project_metadata = True
+            if "name" in legacy_data:
+                ws.project_name = normalize_pkg_name(legacy_data["name"]) or legacy_data["name"]
+            if "version" in legacy_data:
+                ws.project_version = str(legacy_data["version"])
+            if "description" in legacy_data:
+                ws.project_description = str(legacy_data["description"])
+            if "license" in legacy_data:
+                ws.project_license = str(legacy_data["license"])
+
+            for req_str in legacy_data.get("dependencies", []):
+                dep_name = parse_req_name(req_str)
+                if dep_name:
+                    ws.direct_runtime_deps.add(dep_name)
+
+            for group_name, group_reqs in legacy_data.get("optional-dependencies", {}).items():
+                for req_str in group_reqs:
+                    dep_name = parse_req_name(req_str)
+                    if dep_name and group_name.lower() in {"dev", "test", "testing", "lint", "build", "docs"}:
+                        ws.direct_dev_deps.add(dep_name)
+
+    # Check requirements.txt if direct_runtime_deps is still empty
+    if not ws.direct_runtime_deps:
+        for cand_req in ("requirements.txt", "requirements/prod.txt", "requirements/main.txt"):
+            cand_path = project_path / cand_req
+            if cand_path.is_file():
+                for req_str in _parse_requirements_txt(cand_path):
+                    dep_name = parse_req_name(req_str)
+                    if dep_name:
+                        ws.direct_runtime_deps.add(dep_name)
+                break
+
+    # Check requirements-dev.txt if direct_dev_deps is still empty
+    if not ws.direct_dev_deps:
+        for cand_dev in ("requirements-dev.txt", "dev-requirements.txt", "requirements/dev.txt"):
+            cand_path = project_path / cand_dev
+            if cand_path.is_file():
+                for req_str in _parse_requirements_txt(cand_path):
+                    dep_name = parse_req_name(req_str)
+                    if dep_name:
+                        ws.direct_dev_deps.add(dep_name)
+                break
 
     # PEP 735 dependency-groups and tool.uv.dev-dependencies
     dep_groups = pyproject_data.get("dependency-groups", {})
@@ -992,6 +1452,87 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                 dep_name = parse_req_name(req_str)
                 if dep_name:
                     ws.direct_dev_deps.add(dep_name)
+
+    # Tool Nuitka configuration in pyproject.toml
+    tool_nuitka = pyproject_data.get("tool", {}).get("nuitka", {})
+    if isinstance(tool_nuitka, dict):
+        for key, field_name in (
+            ("include-package", "include_packages"),
+            ("include-packages", "include_packages"),
+            ("include_package", "include_packages"),
+            ("include_packages", "include_packages"),
+            ("include-module", "include_modules"),
+            ("include-modules", "include_modules"),
+            ("include_module", "include_modules"),
+            ("include_modules", "include_modules"),
+            ("include-package-data", "include_package_data"),
+            ("include_package_data", "include_package_data"),
+            ("enable-plugin", "plugins"),
+            ("enable-plugins", "plugins"),
+            ("plugins", "plugins"),
+        ):
+            val = tool_nuitka.get(key)
+            if isinstance(val, str):
+                vals = [v.strip() for v in val.split(",") if v.strip()]
+            elif isinstance(val, list):
+                vals = [str(v).strip() for v in val if str(v).strip()]
+            else:
+                vals = []
+            for v in vals:
+                cur = ws.nuitka_directives.setdefault(field_name, [])
+                if v not in cur:
+                    cur.append(v)
+
+    # Discover Nuitka directives in project source files
+    py_candidates: list[Path] = []
+    try:
+        py_candidates.extend(project_path.glob("*.py"))
+        src_dir = project_path / "src"
+        if src_dir.is_dir():
+            py_candidates.extend(src_dir.glob("*.py"))
+            py_candidates.extend(src_dir.glob("*/*.py"))
+    except OSError:
+        pass
+
+    for py_file in py_candidates:
+        file_directives = parse_nuitka_source_directives(py_file)
+        for k, vlist in file_directives.items():
+            cur = ws.nuitka_directives.setdefault(k, [])
+            for item in vlist:
+                if item not in cur:
+                    cur.append(item)
+
+    # Inject Nuitka direct dependencies into direct_runtime_deps
+    for npkg in ws.nuitka_directives.get("include_packages", []):
+        for p in npkg.split(","):
+            p_clean = normalize_pkg_name(p.strip())
+            if p_clean:
+                ws.direct_runtime_deps.add(p_clean)
+    for npkg in ws.nuitka_directives.get("include_package_data", []):
+        for p in npkg.split(","):
+            p_clean = normalize_pkg_name(p.strip())
+            if p_clean:
+                ws.direct_runtime_deps.add(p_clean)
+    for nmod in ws.nuitka_directives.get("include_modules", []):
+        for m in nmod.split(","):
+            m_clean = m.strip()
+            if m_clean:
+                top_pkg = normalize_pkg_name(m_clean.split(".")[0])
+                if top_pkg:
+                    ws.direct_runtime_deps.add(top_pkg)
+    for nplug in ws.nuitka_directives.get("plugins", []):
+        plug_pkg = normalize_pkg_name(nplug.strip())
+        if plug_pkg in KNOWN_PACKAGE_TOP_MODULES or plug_pkg in (
+            "numpy",
+            "torch",
+            "scipy",
+            "matplotlib",
+            "pyqt5",
+            "pyside6",
+            "kivy",
+            "gevent",
+        ):
+            ws.direct_runtime_deps.add(plug_pkg)
 
     # 1. Inspect virtualenv (.venv) for rich .dist-info metadata and licence texts
     venv_components: dict[str, Component] = {}
@@ -1142,12 +1683,15 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                     comp.discovery_evidence.insert(0, "uv.lock")
             else:
                 inferred_mods = sorted({pname.replace("-", "_"), *KNOWN_PACKAGE_TOP_MODULES.get(pname, [])})
+                p_src = f"https://pypi.org/project/{pname}/{pver}/#files" if pver != "unknown" else f"https://pypi.org/project/{pname}/"
                 comp = Component(
                     name=pname,
                     version=pver,
                     component_type=ComponentType.PYTHON_PACKAGE,
                     scope=scope,
                     ecosystem="PyPI",
+                    homepage=f"https://pypi.org/project/{pname}/",
+                    source_url=p_src,
                     hashes=hashes,
                     dependencies=dep_names,
                     top_level_modules=inferred_mods,
@@ -1223,6 +1767,8 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                     component_type=ComponentType.PYTHON_PACKAGE,
                     scope=ComponentScope.REQUIRED,
                     ecosystem="PyPI",
+                    homepage=f"https://pypi.org/project/{dep_name}/",
+                    source_url=f"https://pypi.org/project/{dep_name}/",
                     top_level_modules=inferred_mods,
                     is_bundled=True,
                     discovery_evidence=["pyproject.toml"],

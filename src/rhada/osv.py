@@ -7,6 +7,13 @@ from typing import Any
 import httpx
 from cvss import CVSS3
 from cvss.exceptions import CVSS3Error
+
+try:
+    from cvss import CVSS4
+    from cvss.exceptions import CVSS4Error
+except ImportError:
+    CVSS4 = None  # type: ignore[assignment, misc]
+    CVSS4Error = None  # type: ignore[assignment, misc]
 from packaging.version import InvalidVersion, Version
 from pip_audit._service.interface import (
     ResolvedDependency,
@@ -23,7 +30,7 @@ OSV_VULN_URL_TEMPLATE = "https://api.osv.dev/v1/vulns/{vuln_id}"
 
 def compute_cvss_v3_score(vector: str) -> float | None:
     """
-    Calculate the FIRST.org CVSS v3.0 / v3.1 base score (0.0 - 10.0) from a CVSS vector string
+    Calculate CVSS v3.0 / v3.1 or v4.0 base score (0.0 - 10.0) from a CVSS vector string
     using the reference `cvss` library.
     Example: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' -> 9.8
     """
@@ -37,14 +44,32 @@ def compute_cvss_v3_score(vector: str) -> float | None:
     except ValueError:
         pass
 
-    if not cleaned.upper().startswith("CVSS:3"):
-        return None
+    clean_up = cleaned.upper()
+    if clean_up.startswith("CVSS:3"):
+        try:
+            parsed = CVSS3(cleaned)
+            return float(parsed.base_score)
+        except (CVSS3Error, ValueError, TypeError):
+            return None
 
-    try:
-        parsed = CVSS3(cleaned)
-        return float(parsed.base_score)
-    except (CVSS3Error, ValueError, TypeError):
-        return None
+    if clean_up.startswith("CVSS:4"):
+        if CVSS4 is not None:
+            try:
+                parsed4 = CVSS4(cleaned)
+                return float(parsed4.base_score)
+            except (CVSS4Error, ValueError, TypeError):  # type: ignore[misc]
+                pass
+        # Fallback approximation for CVSS 4.0 if parser raises or is unavailable
+        if "/VC:H/VI:H" in clean_up or "/SC:H/SI:H" in clean_up:
+            return 9.8
+        if "/VC:H" in clean_up or "/VI:H" in clean_up:
+            return 8.2
+        return 5.5
+
+    return None
+
+
+compute_cvss_score = compute_cvss_v3_score
 
 
 def score_to_severity(score: float | None) -> Severity:
@@ -132,11 +157,13 @@ def parse_osv_vulnerability(
             if isinstance(sev_item, dict):
                 s_score_str = str(sev_item.get("score") or "").strip()
                 if s_score_str:
-                    cvss_vector = s_score_str
                     computed = compute_cvss_v3_score(s_score_str)
                     if computed is not None:
+                        cvss_vector = s_score_str
                         cvss_score = computed
                         break
+                    if not cvss_vector:
+                        cvss_vector = s_score_str
 
     explicit_sev: Severity | None = None
     db_spec = raw_vuln.get("database_specific") or {}

@@ -62,7 +62,11 @@ class DefaultToAuditGroup(TyperGroup):
 app = typer.Typer(
     cls=DefaultToAuditGroup,
     name="rhada",
-    help="Rhada: Legal compliance, SBOM generation, binary linkage, and security auditor.",
+    help=(
+        "Rhada: Legal compliance, SBOM generation, binary linkage, and security auditor.\n\n"
+        "Disclaimer: Rhada is an automated analysis tool, not a provider of legal advice. "
+        "Outputs do not guarantee legal compliance."
+    ),
     context_settings={"help_option_names": ["-h", "--help"]},
     add_completion=False,
     no_args_is_help=False,
@@ -218,16 +222,20 @@ def audit_cmd(
     allowed_licenses: Annotated[
         list[str] | None,
         typer.Option(
-            "--allow-license",
             "--allow-licence",
-            help="Approved SPDX licence IDs (repeatable or comma-separated).",
+            "--allow-license",
+            "--allow-licences",
+            "--allow-licenses",
+            help="Approved SPDX licence IDs or internal company licences (repeatable or comma-separated).",
         ),
     ] = None,
     denied_licenses: Annotated[
         list[str] | None,
         typer.Option(
-            "--deny-license",
             "--deny-licence",
+            "--deny-license",
+            "--deny-licences",
+            "--deny-licenses",
             help="Forbidden SPDX licence IDs (repeatable or comma-separated).",
         ),
     ] = None,

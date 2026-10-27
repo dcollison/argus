@@ -195,6 +195,14 @@ def render_console_report(report: AuditReport, console: Console | None = None) -
         for w in report.warnings:
             out.print(f"[yellow]Warning:[/yellow] {w}")
 
+    out.print(
+        Text(
+            "Notice: Rhada is an automated analysis tool, not a provider of legal advice. "
+            "Compliance findings and SBOMs do not guarantee legal compliance. Consult qualified legal counsel.",
+            style="dim italic",
+        )
+    )
+
 
 def format_report_text(report: AuditReport) -> str:
     """Render the human-readable report to a plain-text string (without ANSI codes)."""

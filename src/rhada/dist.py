@@ -945,6 +945,23 @@ def correlate_workspace_and_dist(
     # Map bundled module names to normalised package names using workspace mapping
     matched_pkg_names: set[str] = set(dist_result.discovered_distributions.keys())
     pkg_bundled_files: dict[str, list[str]] = {}
+    for npkg in ws.nuitka_directives.get("include_packages", []):
+        for p in npkg.split(","):
+            norm_p = normalize_pkg_name(p.strip())
+            if norm_p:
+                matched_pkg_names.add(norm_p)
+    for npkg in ws.nuitka_directives.get("include_package_data", []):
+        for p in npkg.split(","):
+            norm_p = normalize_pkg_name(p.strip())
+            if norm_p:
+                matched_pkg_names.add(norm_p)
+    for nmod in ws.nuitka_directives.get("include_modules", []):
+        for m in nmod.split(","):
+            m_clean = m.strip()
+            if m_clean:
+                mpkg = ws.module_to_package.get(m_clean) or normalize_pkg_name(m_clean.split(".")[0])
+                if mpkg:
+                    matched_pkg_names.add(mpkg)
 
     for mod_name in dist_result.bundled_modules:
         mod_files = dist_result.module_files.get(mod_name, [])

@@ -34,6 +34,10 @@ RAW_TO_SPDX: dict[str, str] = {
     "apache software license": "Apache-2.0",
     "apache software license 2.0": "Apache-2.0",
     "asl 2": "Apache-2.0",
+    "apache-1.1": "Apache-1.1",
+    "apache 1.1": "Apache-1.1",
+    "apache license 1.1": "Apache-1.1",
+    "apache software license 1.1": "Apache-1.1",
     "bsd": "BSD-3-Clause",
     "bsd license": "BSD-3-Clause",
     "bsd-3-clause": "BSD-3-Clause",
@@ -123,6 +127,14 @@ RAW_TO_SPDX: dict[str, str] = {
     "hpnd": "HPND",
     "historical permission notice and disclaimer (hpnd)": "HPND",
     "artistic-2.0": "Artistic-2.0",
+    "bsl-1.0": "BSL-1.0",
+    "boost": "BSL-1.0",
+    "boost software license": "BSL-1.0",
+    "boost software license 1.0": "BSL-1.0",
+    "boost software license - version 1.0": "BSL-1.0",
+    "mit-0": "MIT-0",
+    "python-2.0": "Python-2.0",
+    "python 2.0": "Python-2.0",
     "proprietary": "LicenseRef-Proprietary",
     "commercial": "LicenseRef-Proprietary",
     "other/proprietary license": "LicenseRef-Proprietary",
@@ -165,11 +177,15 @@ TROVE_CLASSIFIER_MAP: dict[str, str] = {
 PERMISSIVE_SPDX = {
     "MIT",
     "Apache-2.0",
+    "Apache-1.1",
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
     "ISC",
     "PSF-2.0",
+    "BSL-1.0",
+    "MIT-0",
+    "Python-2.0",
     "Zlib",
     "HPND",
     "Artistic-2.0",
@@ -232,6 +248,7 @@ class NativeLibraryProfile(NamedTuple):
     homepage: str
     copyright_notice: str
     license_text: str
+    source_url: str = ""
 
 
 KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
@@ -332,6 +349,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://gcc.gnu.org/",
         copyright_notice="Copyright (C) Free Software Foundation, Inc.",
         license_text="The GNU Quad-Precision Math Library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.",
+        source_url="https://github.com/gcc-mirror/gcc/tree/master/libquadmath",
     ),
     "libgomp": NativeLibraryProfile(
         canonical_name="libgomp",
@@ -416,6 +434,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://people.engr.tamu.edu/davis/suitesparse.html",
         copyright_notice="Copyright (c) 2005-2024, University of Florida, Timothy A. Davis, and William W. Hager.",
         license_text="CHOLMOD is licensed under the GNU Lesser General Public License v2.1 or later.",
+        source_url="https://github.com/DrTimothyAldenDavis/SuiteSparse/tree/master/CHOLMOD",
     ),
     "libsuitesparseconfig": NativeLibraryProfile(
         canonical_name="suitesparse",
@@ -521,6 +540,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://gmplib.org/",
         copyright_notice="Copyright 1991-2023 Free Software Foundation, Inc.",
         license_text="The GNU Multiple Precision Arithmetic Library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 3 of the License, or (at your option) any later version.",
+        source_url="https://gmplib.org/#DOWNLOAD",
     ),
     "libreadline": NativeLibraryProfile(
         canonical_name="readline",
@@ -682,6 +702,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://libgeos.org/",
         copyright_notice="Copyright (C) 2006 Refractions Research Inc.",
         license_text="GEOS is licensed under the GNU Lesser General Public License Version 2.1.",
+        source_url="https://github.com/libgeos/geos",
     ),
     "libgeos_c": NativeLibraryProfile(
         canonical_name="geos",
@@ -689,6 +710,7 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         homepage="https://libgeos.org/",
         copyright_notice="Copyright (C) 2006 Refractions Research Inc.",
         license_text="GEOS is licensed under the GNU Lesser General Public License Version 2.1.",
+        source_url="https://github.com/libgeos/geos",
     ),
 }
 
@@ -813,6 +835,10 @@ def normalize_single_license(raw: str) -> str:
         return "NOASSERTION"
 
     lower = cleaned.lower()
+    if lower.startswith("licenseref-"):
+        suffix = cleaned.split("-", 1)[1] if "-" in cleaned else cleaned[11:]
+        return f"LicenseRef-{suffix}"
+
     if lower in RAW_TO_SPDX:
         return RAW_TO_SPDX[lower]
 
@@ -855,47 +881,66 @@ def normalize_single_license(raw: str) -> str:
                 return f"{base_norm} WITH LLVM-exception"
             return f"{base_norm} WITH {exc_part}"
 
-    # Heuristic substring matching for verbose licence strings
-    if "affero" in lower or "agpl" in lower:
+    # Word-boundary and heuristic regex matching for verbose licence strings
+    if re.search(r"\b(?:affero|agpl)\b", lower):
         return "AGPL-3.0-or-later"
-    if "lesser general public" in lower or "lgpl" in lower:
+    if "lesser general public" in lower or re.search(r"\blgpl\b", lower):
         if "3" in lower:
             return "LGPL-3.0-or-later" if "+" in lower or "later" in lower else "LGPL-3.0-only"
         return "LGPL-2.1-or-later" if "+" in lower or "later" in lower else "LGPL-2.1-only"
-    if "general public license" in lower or re.search(r"\bgpl\b", lower):
+    if ("general public license" in lower or re.search(r"\bgpl\b", lower)) and "compatible" not in lower:
         if "gcc" in lower and "exception" in lower:
             return "GPL-3.0-with-GCC-exception"
         if "2" in lower:
             return "GPL-2.0-or-later" if "+" in lower or "later" in lower else "GPL-2.0-only"
         return "GPL-3.0-or-later" if "+" in lower or "later" in lower else "GPL-3.0-only"
-    if "mozilla public license" in lower or "mpl" in lower:
+    if "mozilla public license" in lower or re.search(r"\bmpl\b", lower):
         return "MPL-2.0"
     if "apache" in lower:
+        if "1.1" in lower:
+            return "Apache-1.1"
+        if "1.0" in lower:
+            return "Apache-1.0"
         return "Apache-2.0"
-    if "bsd" in lower:
-        if "0" in lower or "zero" in lower:
+    if re.search(r"\bbsd\b", lower):
+        if re.search(r"\b(?:0|zero)[-\s]*clause\b", lower) or "0bsd" in lower:
             return "0BSD"
-        if "2" in lower or "simplified" in lower:
+        if re.search(r"\b(?:2|two)[-\s]*clause\b", lower) or "simplified" in lower or "freebsd" in lower:
             return "BSD-2-Clause"
         return "BSD-3-Clause"
     if re.search(r"\bmit\b", lower):
         return "MIT"
     if re.search(r"\bisc\b", lower):
         return "ISC"
-    if "python software foundation" in lower or "psf" in lower:
+    if "python software foundation" in lower or re.search(r"\bpsf\b", lower):
         return "PSF-2.0"
     if "unlicense" in lower:
         return "Unlicense"
     if "public domain" in lower:
         return "Public-Domain"
+
+    # Corporate and internal licence patterns (e.g. "Acme Corp Internal Licence")
+    internal_match = re.search(r"\b(?:([A-Za-z0-9_ -]+?)\s+)?internal\s+licen[cs]e\b", cleaned, re.IGNORECASE)
+    if internal_match:
+        prefix = (internal_match.group(1) or "").strip()
+        cleaned_prefix = re.sub(r"^(?:the|an|a|our)\s+", "", prefix, flags=re.IGNORECASE).strip()
+        if cleaned_prefix:
+            slug = "-".join(part for part in re.split(r"[\s_-]+", cleaned_prefix) if part)
+            return f"LicenseRef-{slug}-Internal"
+        return "LicenseRef-Internal"
+
+    if "internal" in lower and ("proprietary" in lower or "confidential" in lower or "rights reserved" in lower):
+        return "LicenseRef-Internal"
+
     if "proprietary" in lower or "commercial" in lower:
         return "LicenseRef-Proprietary"
 
     return "NOASSERTION"
 
 
-def _infer_spdx_from_section(lower: str) -> str:
-    """Infer an SPDX identifier from a lower-cased licence text section."""
+def _infer_spdx_from_section(section: str) -> str:
+    """Infer an SPDX identifier from a licence text section."""
+    lower = section.lower()
     if "apache license" in lower and "version 2.0" in lower:
         return "Apache-2.0"
     if "gnu affero general public license" in lower:
@@ -926,6 +971,24 @@ def _infer_spdx_from_section(lower: str) -> str:
         return "PSF-2.0"
     if "this is free and unencumbered software released into the public domain" in lower:
         return "Unlicense"
+
+    # Corporate and internal licence patterns (e.g. "Acme Corp Internal Licence. All rights reserved.")
+    internal_match = re.search(r"\b(?:([A-Za-z0-9_ -]+?)\s+)?internal\s+licen[cs]e\b", section, re.IGNORECASE)
+    if internal_match:
+        prefix = (internal_match.group(1) or "").strip()
+        cleaned_prefix = re.sub(r"^(?:the|an|a|our)\s+", "", prefix, flags=re.IGNORECASE).strip()
+        if cleaned_prefix:
+            slug = "-".join(part for part in re.split(r"[\s_-]+", cleaned_prefix) if part)
+            return f"LicenseRef-{slug}-Internal"
+        return "LicenseRef-Internal"
+
+    if (
+        ("all rights reserved" in lower and ("internal" in lower or "proprietary" in lower or "confidential" in lower))
+        or "proprietary and confidential" in lower
+        or "for internal use only" in lower
+    ):
+        return "LicenseRef-Proprietary"
+
     return "NOASSERTION"
 
 
@@ -937,14 +1000,14 @@ def infer_spdx_from_license_text(text: str) -> str:
     # inspect the primary header section before any ==== or ---- divider first.
     primary_section = re.split(r"\n\s*(?:={4,}|-{4,})\s*\n", text, maxsplit=1)[0]
     if primary_section != text:
-        header_match = _infer_spdx_from_section(primary_section.lower())
+        header_match = _infer_spdx_from_section(primary_section)
         if header_match != "NOASSERTION":
             return header_match
     if len(text) > 1500:
-        header_match = _infer_spdx_from_section(text[:1500].lower())
+        header_match = _infer_spdx_from_section(text[:1500])
         if header_match != "NOASSERTION":
             return header_match
-    return _infer_spdx_from_section(text.lower())
+    return _infer_spdx_from_section(text)
 
 
 def classify_single_spdx(spdx_id: str) -> LicenseRiskCategory:
@@ -971,6 +1034,10 @@ def classify_single_spdx(spdx_id: str) -> LicenseRiskCategory:
         spdx_id == "LicenseRef-Proprietary"
         or "proprietary" in spdx_id.lower()
         or "intel" in spdx_id.lower()
+        or "commercial" in spdx_id.lower()
+        or "internal" in spdx_id.lower()
+        or "corporate" in spdx_id.lower()
+        or spdx_id.startswith("LicenseRef-")
     ):
         return LicenseRiskCategory.PROPRIETARY
     return LicenseRiskCategory.UNKNOWN
@@ -1148,8 +1215,10 @@ def parse_spdx_expression(
         best_cat = min((classify_single_spdx(c) for c in candidates), key=lambda c: RISK_SEVERITY_ORDER[c])
         return spdx_expr, best_cat, True, candidates
 
-    primary = candidates[0]
-    return primary, classify_single_spdx(primary), False, candidates
+    # When multiple distinct licenses are declared without explicit 'and', treat as dual-licensed (OR) choice per PEP 639
+    spdx_expr = " OR ".join(candidates)
+    best_cat = min((classify_single_spdx(c) for c in candidates), key=lambda c: RISK_SEVERITY_ORDER[c])
+    return spdx_expr, best_cat, True, candidates
 
 
 def evaluate_spdx_allowlist(spdx_expr: str, allowed_upper: set[str]) -> bool:
@@ -1249,7 +1318,7 @@ def extract_copyright_notices(
                 seen_lower.add(norm)
                 notices.append(line)
 
-    if not notices and (author or author_email):
+    if author or author_email:
         parts = [
             p.strip()
             for p in (
@@ -1259,7 +1328,10 @@ def extract_copyright_notices(
             if p and p.strip()
         ]
         if parts:
-            notices.append(f"Copyright (c) {' '.join(parts)}")
+            author_line = f"Copyright (c) {' '.join(parts)}"
+            author_token = author.lower().strip() if author else author_email.lower().strip()
+            if not any(author_token in n.lower() for n in notices):
+                notices.append(author_line)
 
     return notices
 

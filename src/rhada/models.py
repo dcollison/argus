@@ -64,6 +64,12 @@ class ComponentScope(StrEnum):
     DEV_EXCLUDED = "dev-or-build-excluded"
 
 
+LEGAL_DISCLAIMER: str = (
+    "Rhada is an automated technical audit tool and does not provide legal advice or guarantee "
+    "legal compliance. Output reports, SBOMs, and licence classifications should be reviewed by qualified legal counsel."
+)
+
+
 class LicenseRiskCategory(StrEnum):
     """Legal risk category of a component's declared licence."""
 
@@ -222,6 +228,7 @@ class Component:
     ecosystem: str = "PyPI"
     description: str = ""
     homepage: str = ""
+    source_url: str = ""
     author: str = ""
     license_info: LicenseInfo = field(default_factory=LicenseInfo)
     hashes: dict[str, str] = field(default_factory=dict)
@@ -258,6 +265,7 @@ class Component:
             "ecosystem": self.ecosystem,
             "description": self.description,
             "homepage": self.homepage,
+            "source_url": self.source_url,
             "author": self.author,
             "license_info": self.license_info.to_dict(),
             "hashes": dict(self.hashes),
@@ -443,6 +451,7 @@ class AuditReport:
     linkage_report: BinaryLinkageReport | None = None
     exit_code: ExitCode = ExitCode.OK
     warnings: list[str] = field(default_factory=list)
+    disclaimer: str = LEGAL_DISCLAIMER
 
     @property
     def bundled_python_components(self) -> list[Component]:
@@ -501,4 +510,5 @@ class AuditReport:
             "compliance_findings": [f.to_dict() for f in self.compliance_findings],
             "linkage_report": self.linkage_report.to_dict() if self.linkage_report else None,
             "warnings": list(self.warnings),
+            "disclaimer": self.disclaimer,
         }

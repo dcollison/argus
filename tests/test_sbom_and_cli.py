@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -279,6 +280,9 @@ def test_sbom_malformed_urls_and_same_named_components() -> None:
 def test_cli_version_and_help_and_unicode_notices(tmp_path: Path) -> None:
     runner = CliRunner()
 
+    def strip_ansi(text: str) -> str:
+        return re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+
     # Test --version output
     res_ver = runner.invoke(cli, ["--version"])
     assert res_ver.exit_code == 0
@@ -288,6 +292,12 @@ def test_cli_version_and_help_and_unicode_notices(tmp_path: Path) -> None:
     res_help = runner.invoke(cli, ["--help"])
     assert res_help.exit_code == 0
     assert "Rhada: Legal compliance" in res_help.output
+    assert "Disclaimer:" in res_help.output
+
+    res_audit_help = runner.invoke(cli, ["audit", "--help"])
+    assert res_audit_help.exit_code == 0
+    clean_audit_help = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", res_audit_help.output)
+    assert "--allow-licence" in clean_audit_help
 
     # Test Unicode notices output to stdout without charmap/cp1252 crashing
     ws = tmp_path / "unicode_pkg"
@@ -314,5 +324,54 @@ dependencies = ["unicode-pkg>=1.0.0"]
     res_notices = runner.invoke(cli, ["notices", "--project", str(ws)])
     assert res_notices.exit_code == 0
     assert "Michał Wędrowny" in res_notices.output or "\u0144" in res_notices.output
+
+    # Test invoking audit with plural --allow-licences alias
+    res_alias = runner.invoke(cli, ["audit", "--project", str(ws), "--offline", "--allow-licences", "MIT,Apache-2.0"])
+    assert res_alias.exit_code == 0
+
+    # Test audit CLI with Corporate Internal Licence
+    internal_ws = tmp_path / "internal_pkg_ws"
+    internal_ws.mkdir()
+    (internal_ws / "pyproject.toml").write_text(
+        """
+[project]
+name = "internal-app"
+version = "1.0.0"
+dependencies = ["acme-internal-service>=1.0.0"]
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    int_sp = internal_ws / ".venv" / "Lib" / "site-packages"
+    create_dist_info(
+        int_sp,
+        "acme-internal-service",
+        "1.0.0",
+        license_str="",
+        top_level=["acme_internal_service"],
+        license_files={"LICENSE": "Acme Corp Internal Licence. All rights reserved."},
+    )
+
+    # Without allow-licence -> failure
+    res_no_allow = runner.invoke(cli, ["audit", "--project", str(internal_ws), "--offline"])
+    assert res_no_allow.exit_code == 2
+    assert "LICENSE_FAILURE" in strip_ansi(res_no_allow.output)
+
+    # With --allow-licence using human-readable raw title
+    res_allow_raw = runner.invoke(
+        cli,
+        ["audit", "--project", str(internal_ws), "--offline", "--allow-licence", "Acme Corp Internal Licence"],
+    )
+    assert res_allow_raw.exit_code == 0
+    assert "Status: PASSED" in strip_ansi(res_allow_raw.output)
+    assert "No legal or licence compliance violations detected." in strip_ansi(res_allow_raw.output)
+
+    # With --allow-licence using SPDX ID
+    res_allow_spdx = runner.invoke(
+        cli,
+        ["audit", "--project", str(internal_ws), "--offline", "--allow-licence", "LicenseRef-Acme-Corp-Internal"],
+    )
+    assert res_allow_spdx.exit_code == 0
+    assert "Status: PASSED" in strip_ansi(res_allow_spdx.output)
 
 
