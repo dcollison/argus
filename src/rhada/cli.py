@@ -239,6 +239,15 @@ def audit_cmd(
             help="Forbidden SPDX licence IDs (repeatable or comma-separated).",
         ),
     ] = None,
+    verbose: Annotated[
+        bool,
+        typer.Option(
+            "--verbose",
+            "-v",
+            "--full",
+            help="Show detailed distribution file accounting and component mapping breakdown.",
+        ),
+    ] = False,
 ) -> None:
     """Run a legal compliance, SBOM, binary linkage, and security audit."""
     if not project_path.exists():
@@ -254,6 +263,7 @@ def audit_cmd(
         compilation_report_path=compilation_report,
         include_dev=include_dev,
         offline=offline,
+        verbose=verbose,
         fail_on_severity=fail_on_severity,
         fail_on_license=fail_on_license,
         fail_on_linkage=fail_on_linkage,
@@ -275,7 +285,7 @@ def audit_cmd(
     if console_format == ConsoleFormat.JSON:
         _safe_echo_text(json.dumps(report.to_dict(), indent=2))
     else:
-        render_console_report(report, console=Console(safe_box=True))
+        render_console_report(report, console=Console(safe_box=True), verbose=verbose)
 
     raise typer.Exit(code=int(report.exit_code))
 

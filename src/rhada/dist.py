@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import struct
 import sys
@@ -13,6 +14,7 @@ from defusedxml import ElementTree as ET
 from rhada.elf import (
     elf_to_native_component,
     extract_printable_strings,
+    is_binary_file,
     is_elf_file,
     is_pe_bytes,
     is_pe_file,
@@ -28,10 +30,13 @@ from rhada.models import (
     Component,
     ComponentScope,
     ComponentType,
+    DistributionFileCategory,
+    DistributionFileInfo,
+    DistributionFileInventory,
     DistributionLayout,
     ElfBinaryInfo,
 )
-from rhada.pe import extract_utf16le_strings
+from rhada.pe import extract_utf16le_strings, is_windows_compiler_runtime_dll
 from rhada.spdx import KNOWN_NATIVE_LIBRARIES
 from rhada.workspace import (
     WorkspaceMetadata,
@@ -179,6 +184,7 @@ class DistInspectionResult:
     layout: DistributionLayout = DistributionLayout.STANDALONE_DIR
     bundled_modules: set[str] = field(default_factory=set)
     statically_compiled_modules: set[str] = field(default_factory=set)
+    project_modules: set[str] = field(default_factory=set)
     discovered_distributions: dict[str, str] = field(default_factory=dict)
     dist_info_components: dict[str, Component] = field(default_factory=dict)
     native_components: list[Component] = field(default_factory=list)
@@ -264,6 +270,29 @@ def parse_nuitka_compilation_report(xml_path: Path, result: DistInspectionResult
         reason = (mod_elem.get("reason") or "").lower()
         if reason == "excluded":
             continue
+        source_path = (mod_elem.get("source_path") or "").replace("\\", "/")
+        dist_attr = (mod_elem.get("distribution") or "").strip()
+        usage = (mod_elem.get("usage") or "").lower()
+
+        # Identify first-party project source code
+        is_project_code = (
+            source_path.startswith(("${cwd}", "./", "/"))
+            or usage == "root_module"
+            or (
+                not dist_attr
+                and "${sys." not in source_path
+                and "site-packages" not in source_path
+                and "dist-packages" not in source_path
+            )
+        )
+        if is_project_code:
+            result.project_modules.add(mod_name)
+            result.project_modules.add(top)
+            if "compiled" in kind or "bytecode" in kind or not kind:
+                result.statically_compiled_modules.add(top)
+                result.statically_compiled_modules.add(mod_name)
+            continue
+
         _record_module_file(result, mod_name, f"nuitka-report:{mod_name}")
         if "compiled" in kind or "bytecode" in kind or not kind:
             result.statically_compiled_modules.add(top)
@@ -379,14 +408,11 @@ def _inspect_binary_payload_strings(
         result.bundler_type = BundlerType.PYINSTALLER
 
     if (
-        (
-            "__nuitka_version__" in joined
-            or "NUITKA_ONEFILE_PARENT" in joined
-            or "modulecode_" in joined
-            or "__constants.bin" in joined
-        )
-        and result.bundler_type == BundlerType.NONE
-    ):
+        "__nuitka_version__" in joined
+        or "NUITKA_ONEFILE_PARENT" in joined
+        or "modulecode_" in joined
+        or "__constants.bin" in joined
+    ) and result.bundler_type == BundlerType.NONE:
         result.bundler_type = BundlerType.NUITKA
 
     # Parse PyInstaller TOC if MEI magic is present
@@ -432,7 +458,11 @@ def _inspect_binary_payload_strings(
                         binary_format="PE",
                     )
             # Check for POSIX native shared library (.so) inside TOC
-            elif (typecode in ("b", "x") or ".so" in fname) and (fname.startswith("lib") or in_libs_dir) and ".so" in fname:
+            elif (
+                (typecode in ("b", "x") or ".so" in fname)
+                and (fname.startswith("lib") or in_libs_dir)
+                and ".so" in fname
+            ):
                 if is_monolithic:
                     _register_embedded_native_lib(
                         fname,
@@ -724,9 +754,8 @@ def inspect_compiled_distribution(
     if (dist_path / "_internal").is_dir() or list(dist_path.rglob("base_library.zip")):
         result.bundler_type = BundlerType.PYINSTALLER
     elif (
-        (dist_path.name.endswith(".dist") or list(dist_path.glob("__constants*")))
-        and result.bundler_type == BundlerType.NONE
-    ):
+        dist_path.name.endswith(".dist") or list(dist_path.glob("__constants*"))
+    ) and result.bundler_type == BundlerType.NONE:
         result.bundler_type = BundlerType.NUITKA
 
     # 1. Inspect any bundled *.dist-info directories (common in PyInstaller standalone dirs)
@@ -784,9 +813,11 @@ def inspect_compiled_distribution(
                 result.warnings.append(f"Failed to parse {fmt_label} binary {rel_path}: {exc}")
                 continue
 
-            is_main_exe = bin_info.is_executable or (
-                is_elf and not lower_fname.endswith(".so") and ".so." not in lower_fname
-            ) or (is_pe and lower_fname.endswith(".exe"))
+            is_main_exe = (
+                bin_info.is_executable
+                or (is_elf and not lower_fname.endswith(".so") and ".so." not in lower_fname)
+                or (is_pe and lower_fname.endswith(".exe"))
+            )
 
             # If main executable, also inspect its embedded strings/TOC (e.g. PyInstaller bootloader or Nuitka main binary)
             if is_main_exe:
@@ -843,7 +874,11 @@ def inspect_compiled_distribution(
                 ):
                     # Nuitka standalone directories place compiled module .so/.pyd files directly
                     result.bundler_type = BundlerType.NUITKA
-                    mod_lead = pkg_parts[0] if ("/" in logical_rel and pkg_parts) else (ext_name.split(".")[0] if ext_name else fname.split(".", 1)[0])
+                    mod_lead = (
+                        pkg_parts[0]
+                        if ("/" in logical_rel and pkg_parts)
+                        else (ext_name.split(".")[0] if ext_name else fname.split(".", 1)[0])
+                    )
                     result.statically_compiled_modules.add(mod_lead)
             else:
                 # Native shared library (.so or .dll)
@@ -900,6 +935,8 @@ def _resolve_pkg_for_module(
     cand = normalize_pkg_name(mod_name)
     if cand in ws.components:
         return cand
+    if cand == normalize_pkg_name(ws.project_name) or cand in ws.project_modules or mod_name in ws.project_modules:
+        return ws.project_name
 
     if "." in mod_name:
         parts = mod_name.split(".")
@@ -911,6 +948,12 @@ def _resolve_pkg_for_module(
             cand_parent = normalize_pkg_name(parent)
             if cand_parent in ws.components:
                 return cand_parent
+            if (
+                cand_parent == normalize_pkg_name(ws.project_name)
+                or cand_parent in ws.project_modules
+                or parent in ws.project_modules
+            ):
+                return ws.project_name
 
     if file_paths:
         for fpath in file_paths:
@@ -924,6 +967,12 @@ def _resolve_pkg_for_module(
                 cand_seg = normalize_pkg_name(seg)
                 if cand_seg in ws.components:
                     return cand_seg
+                if (
+                    cand_seg == normalize_pkg_name(ws.project_name)
+                    or cand_seg in ws.project_modules
+                    or seg in ws.project_modules
+                ):
+                    return ws.project_name
 
     return None
 
@@ -963,10 +1012,17 @@ def correlate_workspace_and_dist(
                 if mpkg:
                     matched_pkg_names.add(mpkg)
 
+    project_pkgs = {
+        ws.project_name,
+        ws.project_name.replace("-", "_"),
+        normalize_pkg_name(ws.project_name),
+    }
+    all_project_modules = set(ws.project_modules) | set(dist_result.project_modules)
+
     for mod_name in dist_result.bundled_modules:
         mod_files = dist_result.module_files.get(mod_name, [])
         pkg_name = _resolve_pkg_for_module(mod_name, ws, mod_files)
-        if pkg_name:
+        if pkg_name and pkg_name not in project_pkgs:
             matched_pkg_names.add(pkg_name)
             for fpath in mod_files:
                 flist = pkg_bundled_files.setdefault(pkg_name, [])
@@ -1010,9 +1066,7 @@ def correlate_workspace_and_dist(
                         if cp not in ws_comp.license_info.copyright_notices:
                             ws_comp.license_info.copyright_notices.append(cp)
             ws_comp.bundled_files = pkg_bundled_files.get(pname, [])
-            is_static_mod = any(
-                m in dist_result.statically_compiled_modules for m in ws_comp.top_level_modules
-            )
+            is_static_mod = any(m in dist_result.statically_compiled_modules for m in ws_comp.top_level_modules)
             ws_comp.is_statically_compiled = is_monolithic or is_static_mod
             ws_comp.has_dynamic_relinking = not is_monolithic and not is_static_mod
             ev_tag = f"bundled:{dist_result.bundler_type.value}"
@@ -1056,11 +1110,29 @@ def correlate_workspace_and_dist(
                 handled_modules.add(mod)
                 handled_modules.add(mod.lower())
 
+    # Include project packages and modules so first-party source code is not treated as unlisted PyPI packages
+    handled_modules.update(project_pkgs)
+    handled_modules.update(all_project_modules)
+    handled_modules.update(m.lower() for m in all_project_modules)
+    for mod, pkg in ws.module_to_package.items():
+        if pkg in project_pkgs:
+            handled_modules.add(mod)
+            handled_modules.add(mod.lower())
+
     for mod_name in sorted(dist_result.bundled_modules):
-        if mod_name in handled_modules or mod_name in STDLIB_MODULES:
+        top = mod_name.split(".", 1)[0]
+        if (
+            mod_name in handled_modules
+            or top in handled_modules
+            or mod_name in STDLIB_MODULES
+            or top in STDLIB_MODULES
+            or any(mod_name.startswith(f"{pm}.") for pm in all_project_modules)
+        ):
             continue
         mod_files = dist_result.module_files.get(mod_name, [])
-        resolved_pkg = _resolve_pkg_for_module(mod_name, ws, mod_files)
+        resolved_pkg = _resolve_pkg_for_module(mod_name, ws, mod_files) or _resolve_pkg_for_module(top, ws, mod_files)
+        if resolved_pkg in project_pkgs:
+            continue
         if resolved_pkg and any(c.name == resolved_pkg for c in active):
             for c in active:
                 if c.name == resolved_pkg:
@@ -1069,19 +1141,24 @@ def correlate_workspace_and_dist(
                             c.bundled_files.append(fpath)
             continue
         # Private underscore modules (_foo) are internal implementation modules, not packages
-        if mod_name.startswith("_"):
+        if mod_name.startswith("_") or top.startswith("_"):
             continue
-        norm_mod = normalize_pkg_name(mod_name)
+
+        # In Python, dotted submodules belong to their top-level package; packages are identified by top
+        norm_mod = normalize_pkg_name(top)
         if (not include_dev and norm_mod in BUILD_AND_DEV_TOOLS) or any(c.name == norm_mod for c in active):
             continue
-        is_static_mod = mod_name in dist_result.statically_compiled_modules
+
+        is_static_mod = (
+            mod_name in dist_result.statically_compiled_modules or top in dist_result.statically_compiled_modules
+        )
         comp = Component(
             name=norm_mod,
             version="unknown",
             component_type=ComponentType.PYTHON_PACKAGE,
             scope=ComponentScope.REQUIRED,
             ecosystem="PyPI",
-            top_level_modules=[mod_name],
+            top_level_modules=[top],
             bundled_files=dist_result.module_files.get(mod_name, []),
             is_bundled=True,
             is_statically_compiled=is_monolithic or is_static_mod,
@@ -1089,6 +1166,8 @@ def correlate_workspace_and_dist(
             discovery_evidence=[f"bundled-module:{mod_name}"],
         )
         active.append(comp)
+        handled_modules.add(top)
+        handled_modules.add(norm_mod)
 
     # 4. Append all discovered native shared libraries
     for nat_comp in dist_result.native_components:
@@ -1146,3 +1225,242 @@ def correlate_workspace_and_dist(
                 issue.provenance = f"vendored-in-wheel:{issue.origin_package}"
 
     return active, excluded
+
+
+def build_distribution_file_inventory(
+    dist_path: Path,
+    target_name: str,
+    target_version: str,
+    components: list[Component],
+    native_components: list[Component],
+    ws: WorkspaceMetadata | None = None,
+    dist_res: DistInspectionResult | None = None,
+) -> DistributionFileInventory:
+    """
+    Construct a complete file accounting inventory for a compiled distribution.
+    Classifies every file in the distribution directory into application binaries,
+    Python runtime / stdlib modules, compiler/OS runtime ABIs, third-party packages,
+    native libraries, metadata, or unaccounted files.
+    """
+    inventory = DistributionFileInventory()
+    if not dist_path.exists():
+        return inventory
+
+    # Monolithic single-file binary
+    if dist_path.is_file():
+        size = dist_path.stat().st_size
+        sha = hashlib.sha256(dist_path.read_bytes()).hexdigest()
+        info = DistributionFileInfo(
+            path=dist_path.name,
+            category=DistributionFileCategory.APPLICATION_BINARY,
+            component_name=target_name,
+            component_version=target_version,
+            size_bytes=size,
+            sha256=sha,
+            description="Monolithic application executable binary",
+        )
+        inventory.files.append(info)
+        inventory.total_files = 1
+        inventory.total_bytes = size
+        return inventory
+
+    # Standalone distribution directory
+    all_files = sorted(
+        [p for p in dist_path.rglob("*") if p.is_file()],
+        key=lambda p: str(p.relative_to(dist_path)).replace("\\", "/"),
+    )
+    inventory.total_files = len(all_files)
+
+    project_pkgs: set[str] = set()
+    project_mods: set[str] = set()
+    if ws is not None:
+        project_pkgs = {
+            ws.project_name,
+            ws.project_name.replace("-", "_"),
+            normalize_pkg_name(ws.project_name),
+        }
+        project_mods = set(ws.project_modules)
+    if dist_res is not None:
+        project_mods.update(dist_res.project_modules)
+
+    python_comp = next((c for c in components if c.name in ("python", "cpython")), None)
+    py_ver = python_comp.version if python_comp else None
+
+    # Pre-map component lookups
+    comp_by_name = {c.name: c for c in components}
+    comp_by_norm = {normalize_pkg_name(c.name): c for c in components}
+    comp_by_mod: dict[str, Component] = {}
+    for c in components:
+        for m in c.top_level_modules:
+            comp_by_mod[m] = c
+            comp_by_mod[m.lower()] = c
+
+    # Identify main executable candidate(s)
+    main_exe_names: set[str] = set()
+    for f in dist_path.iterdir():
+        if not f.is_file():
+            continue
+        fl = f.name.lower()
+        if fl.startswith(("python", "pip")):
+            continue
+        if fl.endswith((".dll", ".so", ".pyd")):
+            continue
+        if (
+            fl.endswith(".exe")
+            or (
+                fl.endswith(".bin")
+                and (
+                    is_binary_file(f) or f.stem.lower() in {target_name.lower(), target_name.lower().replace("-", "_")}
+                )
+            )
+            or (not f.suffix and is_binary_file(f))
+        ):
+            main_exe_names.add(f.name)
+
+    for file_path in all_files:
+        rel_path = str(file_path.relative_to(dist_path)).replace("\\", "/")
+        fname = file_path.name
+        fname_lower = fname.lower()
+        first_seg = rel_path.split("/", 1)[0]
+        size_bytes = file_path.stat().st_size
+        try:
+            sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        except OSError:
+            sha256 = None
+
+        category: DistributionFileCategory = DistributionFileCategory.UNACCOUNTED
+        comp_name: str | None = None
+        comp_ver: str | None = None
+        desc: str = ""
+
+        # 1. Main Application Executable
+        if "/" not in rel_path and fname in main_exe_names:
+            category = DistributionFileCategory.APPLICATION_BINARY
+            comp_name = target_name
+            comp_ver = target_version
+            desc = f"Application main entrypoint binary ({fname})"
+
+        # 2. Packaging / Compliance Metadata
+        elif (
+            fname in {"report.xml", "compilation-report.xml", "pyvenv.cfg", "CACHEDIR.TAG"}
+            or fname.startswith(".load-order-")
+            or fname_lower.startswith(("third_party_notices", "sbom"))
+            or (fname_lower.startswith(("license", "licence", "notice", "authors")) and "/" not in rel_path)
+        ):
+            category = DistributionFileCategory.DATA_OR_METADATA
+            desc = f"Distribution packaging/compliance metadata ({fname})"
+
+        # 3. Python Runtime Library & Standard Library Modules
+        elif re.match(r"^(?:lib)?python\d+(?:\.\d+)?(?:m|d|u|v)?\.(?:dll|so.*)$", fname_lower):
+            category = DistributionFileCategory.PYTHON_RUNTIME
+            comp_name = "python"
+            comp_ver = py_ver
+            desc = "CPython runtime shared library"
+        elif fname_lower in {"base_library.zip", "python.zip"}:
+            category = DistributionFileCategory.PYTHON_RUNTIME
+            comp_name = "python"
+            comp_ver = py_ver
+            desc = "CPython standard library zip archive"
+        elif fname_lower.endswith(".pyd") or ".cpython-" in fname_lower or ".abi3.so" in fname_lower:
+            ext_name = extract_extension_module_name(fname)
+            top = ext_name.split(".", 1)[0] if ext_name else fname.split(".", 1)[0]
+            if top in STDLIB_MODULES or top.lstrip("_") in STDLIB_MODULES:
+                category = DistributionFileCategory.PYTHON_RUNTIME
+                comp_name = "python"
+                comp_ver = py_ver
+                desc = f"CPython standard library C-extension ({top})"
+
+        # 4. Compiler Runtime & Operating System ABI
+        if category == DistributionFileCategory.UNACCOUNTED and (
+            is_windows_msvc_runtime_dll(fname) or is_windows_compiler_runtime_dll(fname) or is_system_abi_lib(fname)
+        ):
+            category = DistributionFileCategory.COMPILER_ABI
+            comp_name = "msvc-runtime" if is_windows_msvc_runtime_dll(fname) else "compiler-abi"
+            desc = f"Compiler runtime / Platform ABI library ({fname})"
+
+        # 5. Vendored Native Shared Libraries
+        if category == DistributionFileCategory.UNACCOUNTED:
+            for nat in native_components:
+                if (
+                    any(rel_path == bf or fname == Path(bf).name for bf in nat.bundled_files)
+                    or (nat.soname and fname_lower == nat.soname.lower())
+                    or (fname_lower.startswith("lib" + nat.name.lower()) and fname_lower.endswith((".dll", ".so")))
+                    or (fname_lower.startswith(nat.name.lower()) and fname_lower.endswith((".dll", ".so")))
+                ):
+                    category = DistributionFileCategory.NATIVE_LIBRARY
+                    comp_name = nat.name
+                    comp_ver = nat.version
+                    prov = f" (vendored by {nat.origin_package})" if nat.origin_package else ""
+                    desc = f"Native shared library ({nat.name}){prov}"
+                    break
+
+        # 6. Bundled Third-Party Python Packages & Native Wheel Libs
+        if category == DistributionFileCategory.UNACCOUNTED:
+            if first_seg.endswith(".libs"):
+                pkg_lead = first_seg[:-5]
+                matched_c = comp_by_norm.get(normalize_pkg_name(pkg_lead)) or comp_by_name.get(pkg_lead)
+                category = DistributionFileCategory.PYTHON_PACKAGE
+                comp_name = matched_c.name if matched_c else pkg_lead
+                comp_ver = matched_c.version if matched_c else None
+                desc = f"Wheel native dependency library folder ({first_seg})"
+            elif first_seg in comp_by_mod:
+                c = comp_by_mod[first_seg]
+                category = DistributionFileCategory.PYTHON_PACKAGE
+                comp_name = c.name
+                comp_ver = c.version
+                desc = f"Bundled package file ({c.name})"
+            elif normalize_pkg_name(first_seg) in comp_by_norm:
+                c = comp_by_norm[normalize_pkg_name(first_seg)]
+                category = DistributionFileCategory.PYTHON_PACKAGE
+                comp_name = c.name
+                comp_ver = c.version
+                desc = f"Bundled package file ({c.name})"
+            elif first_seg in comp_by_name:
+                c = comp_by_name[first_seg]
+                category = DistributionFileCategory.PYTHON_PACKAGE
+                comp_name = c.name
+                comp_ver = c.version
+                desc = f"Bundled package file ({c.name})"
+            else:
+                for c in components:
+                    if rel_path in c.bundled_files or fname in c.bundled_files:
+                        category = (
+                            DistributionFileCategory.PYTHON_PACKAGE
+                            if c.component_type == ComponentType.PYTHON_PACKAGE
+                            else DistributionFileCategory.NATIVE_LIBRARY
+                        )
+                        comp_name = c.name
+                        comp_ver = c.version
+                        desc = f"Bundled component file ({c.name})"
+                        break
+
+        # 7. First-Party Application Modules / Resources
+        if category == DistributionFileCategory.UNACCOUNTED and (
+            first_seg in project_pkgs
+            or first_seg in project_mods
+            or any(rel_path.startswith(f"{pm}/") for pm in project_mods)
+            or (ws and ws.module_to_package.get(first_seg) in project_pkgs)
+        ):
+            category = DistributionFileCategory.APPLICATION_BINARY
+            comp_name = target_name
+            comp_ver = target_version
+            desc = f"Application module/resource file ({first_seg})"
+
+        # 8. Unaccounted fallback
+        if category == DistributionFileCategory.UNACCOUNTED:
+            desc = "Unclassified file in distribution directory"
+
+        inventory.files.append(
+            DistributionFileInfo(
+                path=rel_path,
+                category=category,
+                component_name=comp_name,
+                component_version=comp_ver,
+                size_bytes=size_bytes,
+                sha256=sha256,
+                description=desc,
+            )
+        )
+        inventory.total_bytes += size_bytes
+
+    return inventory
