@@ -73,9 +73,14 @@ def render_console_report(
         else f"FAILED ({report.exit_code.name}, exit={int(report.exit_code)})"
     )
 
+    tgt_ver = (
+        "[dim]unknown[/dim]"
+        if report.target_version in ("unknown", "0.0.0", "")
+        else report.target_version
+    )
     header = Text()
     header.append("Target: ", style="bold")
-    header.append(f"{report.target_name}@{report.target_version}\n")
+    header.append(f"{report.target_name}@{tgt_ver}\n")
     header.append("Mode:   ", style="bold")
     header.append(f"{report.mode.value} (layout={report.layout.value}, bundler={report.bundler_type.value})\n")
     header.append("Status: ", style="bold")
@@ -116,9 +121,10 @@ def render_console_report(
         elif comp.component_type.value == "python-package":
             prov_str = "PyPI package"
 
+        ver_str = "[dim]unknown[/dim]" if comp.version in ("unknown", "", "0.0.0") else comp.version
         comp_table.add_row(
             comp.name,
-            comp.version,
+            ver_str,
             comp.component_type.value,
             prov_str,
             comp.license_info.spdx_id,
@@ -130,7 +136,13 @@ def render_console_report(
 
     # 2. Excluded Build / Dev Tools Summary (when in compiled distribution mode or when dev tools excluded)
     if report.excluded_components:
-        excl_names = ", ".join(sorted(f"{c.name}@{c.version}" for c in report.excluded_components))
+        excl_names = ", ".join(
+            sorted(
+                f"{c.name}@"
+                + ("[dim]unknown[/dim]" if c.version in ("unknown", "", "0.0.0") else c.version)
+                for c in report.excluded_components
+            )
+        )
         out.print(
             Panel(
                 f"[dim]{excl_names}[/dim]",
@@ -241,11 +253,12 @@ def render_console_report(
 
         for f_entry in fi.files:
             cat_style = FILE_CATEGORY_COLORS.get(f_entry.category, "white")
-            comp_str = (
-                f"{f_entry.component_name}@{f_entry.component_version}"
-                if f_entry.component_version
-                else (f_entry.component_name or "—")
-            )
+            if f_entry.component_version in ("unknown", "0.0.0"):
+                comp_str = f"{f_entry.component_name}@[dim]unknown[/dim]"
+            elif f_entry.component_version:
+                comp_str = f"{f_entry.component_name}@{f_entry.component_version}"
+            else:
+                comp_str = f_entry.component_name or "—"
             sha_str = f_entry.sha256[:12] + "…" if f_entry.sha256 else "—"
             file_table.add_row(
                 f_entry.path,

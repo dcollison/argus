@@ -112,7 +112,7 @@ class WorkspaceMetadata:
     """Discovered metadata from a Python or uv project workspace."""
 
     project_name: str = "unknown-project"
-    project_version: str = "0.0.0"
+    project_version: str = "unknown"
     project_description: str = ""
     project_license: str = "UNKNOWN"
     root_path: Path = field(default_factory=lambda: Path("."))
@@ -1646,7 +1646,9 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
     has_explicit_project_metadata = isinstance(project_table, dict) and bool(project_table)
     if isinstance(project_table, dict) and has_explicit_project_metadata:
         ws.project_name = normalize_pkg_name(project_table.get("name", project_path.name)) or project_path.name
-        ws.project_version = str(project_table.get("version", "0.0.1"))
+        ws.project_version = str(project_table.get("version", "unknown"))
+        if ws.project_version in ("0.0.0", "0.0.1"):
+            ws.project_version = "unknown"
         ws.project_description = str(project_table.get("description", ""))
         lic_val = project_table.get("license")
         if isinstance(lic_val, str):
@@ -1681,6 +1683,8 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                 ws.project_name = normalize_pkg_name(legacy_data["name"]) or legacy_data["name"]
             if "version" in legacy_data:
                 ws.project_version = str(legacy_data["version"])
+                if ws.project_version in ("0.0.0", "0.0.1"):
+                    ws.project_version = "unknown"
             if "description" in legacy_data:
                 ws.project_description = str(legacy_data["description"])
             if "license" in legacy_data:

@@ -61,18 +61,28 @@ STDLIB_MODULES: set[str] = set(getattr(sys, "stdlib_module_names", ())) | {
     "_Bootstrap",
     "_bz2",
     "_codecs",
+    "_codecs_cn",
+    "_codecs_hk",
+    "_codecs_iso2022",
+    "_codecs_jp",
+    "_codecs_kr",
+    "_codecs_tw",
     "_collections",
     "_collections_abc",
     "_compat_pickle",
     "_compression",
     "_contextvars",
+    "_crypt",
     "_csv",
     "_ctypes",
     "_curses",
+    "_curses_panel",
     "_datetime",
+    "_dbm",
     "_decimal",
     "_elementtree",
     "_functools",
+    "_gdbm",
     "_hashlib",
     "_heapq",
     "_imp",
@@ -127,16 +137,34 @@ STDLIB_MODULES: set[str] = set(getattr(sys, "stdlib_module_names", ())) | {
     "_wmi",
     "_zoneinfo",
     "base_library",
+    "binascii",
+    "cmath",
+    "fcntl",
+    "grp",
+    "math",
+    "mmap",
     "msvcrt",
+    "nis",
     "nt",
+    "ossaudiodev",
+    "pwd",
+    "pyexpat",
+    "pyiboot01_bootstrap",
     "pyimod01_archive",
     "pyimod02_importers",
     "pyimod03_ctypes",
     "pyimod04_pywin32",
-    "pyiboot01_bootstrap",
+    "readline",
+    "resource",
+    "select",
+    "spwd",
     "struct",
+    "syslog",
+    "termios",
+    "unicodedata",
     "winreg",
     "winsound",
+    "zlib",
 }
 
 BUILD_AND_DEV_TOOLS = {
@@ -828,14 +856,24 @@ def inspect_compiled_distribution(
                     continue
 
             # Check if it's a Python C-extension module (.pyd, .cpython-*.so, .abi3.so, exports PyInit_*,
-            # or a non-lib .so inside a package directory such as scipy/linalg/cython_blas.so)
+            # bare stdlib .so, or a non-lib .so inside a package directory such as scipy/linalg/cython_blas.so)
             has_pyinit = any(s.lstrip("_").startswith("PyInit_") for s in bin_info.exported_symbols_sample)
+            is_bare_stdlib_so = (
+                is_elf
+                and lower_fname.endswith(".so")
+                and (
+                    lower_fname.split(".so", 1)[0] in STDLIB_MODULES
+                    or lower_fname.split(".so", 1)[0].lstrip("_") in STDLIB_MODULES
+                    or lower_fname.startswith("_codecs_")
+                )
+            )
             is_py_ext = not in_native_libs_dir and (
                 lower_fname.endswith(".pyd")
                 or ".cpython-" in lower_fname
                 or ".cp3" in lower_fname
                 or ".abi3." in lower_fname
                 or has_pyinit
+                or is_bare_stdlib_so
                 or (
                     is_elf
                     and "/" in logical_rel
@@ -1283,8 +1321,12 @@ def build_distribution_file_inventory(
     if dist_res is not None:
         project_mods.update(dist_res.project_modules)
 
-    python_comp = next((c for c in components if c.name in ("python", "cpython")), None)
-    py_ver = python_comp.version if python_comp else None
+    python_comp = next((c for c in components if c.name in ("python", "cpython", "libpython")), None)
+    py_ver = (
+        python_comp.version
+        if python_comp and python_comp.version not in ("0.0.0", "0", "unknown")
+        else None
+    )
 
     # Pre-map component lookups
     comp_by_name = {c.name: c for c in components}
@@ -1321,7 +1363,8 @@ def build_distribution_file_inventory(
         rel_path = str(file_path.relative_to(dist_path)).replace("\\", "/")
         fname = file_path.name
         fname_lower = fname.lower()
-        first_seg = rel_path.split("/", 1)[0]
+        clean_rel = rel_path.removeprefix("_internal/")
+        first_seg = clean_rel.split("/", 1)[0]
         size_bytes = file_path.stat().st_size
         try:
             sha256 = hashlib.sha256(file_path.read_bytes()).hexdigest()
@@ -1361,10 +1404,26 @@ def build_distribution_file_inventory(
             comp_name = "python"
             comp_ver = py_ver
             desc = "CPython standard library zip archive"
-        elif fname_lower.endswith(".pyd") or ".cpython-" in fname_lower or ".abi3.so" in fname_lower:
+        elif (
+            fname_lower.endswith((".pyd", ".so", ".dylib"))
+            or ".cpython-" in fname_lower
+            or ".abi3.so" in fname_lower
+            or ".so." in fname_lower
+        ):
             ext_name = extract_extension_module_name(fname)
             top = ext_name.split(".", 1)[0] if ext_name else fname.split(".", 1)[0]
-            if top in STDLIB_MODULES or top.lstrip("_") in STDLIB_MODULES:
+            is_pkg_mod = (
+                first_seg in comp_by_mod
+                or first_seg in comp_by_name
+                or normalize_pkg_name(first_seg) in comp_by_norm
+                or first_seg in project_pkgs
+                or first_seg in project_mods
+            )
+            if not is_pkg_mod and (
+                top in STDLIB_MODULES
+                or top.lstrip("_") in STDLIB_MODULES
+                or top.startswith("_codecs_")
+            ):
                 category = DistributionFileCategory.PYTHON_RUNTIME
                 comp_name = "python"
                 comp_ver = py_ver
@@ -1454,7 +1513,7 @@ def build_distribution_file_inventory(
                 )
             else:
                 for c in components:
-                    if rel_path in c.bundled_files or fname in c.bundled_files:
+                    if rel_path in c.bundled_files or clean_rel in c.bundled_files or fname in c.bundled_files:
                         if c.is_internal:
                             category = DistributionFileCategory.APPLICATION_BINARY
                         elif c.component_type == ComponentType.PYTHON_PACKAGE:
@@ -1474,7 +1533,7 @@ def build_distribution_file_inventory(
         if category == DistributionFileCategory.UNACCOUNTED and (
             first_seg in project_pkgs
             or first_seg in project_mods
-            or any(rel_path.startswith(f"{pm}/") for pm in project_mods)
+            or any(rel_path.startswith(f"{pm}/") or clean_rel.startswith(f"{pm}/") for pm in project_mods)
             or (ws and ws.module_to_package.get(first_seg) in project_pkgs)
             or any(
                 c.is_internal
