@@ -13,6 +13,7 @@ from rich.text import Text
 
 from rhada.models import (
     AuditReport,
+    DistributionFileCategory,
     ExitCode,
     LicenseRiskCategory,
     Severity,
@@ -35,13 +36,42 @@ RISK_COLORS: dict[LicenseRiskCategory, str] = {
     LicenseRiskCategory.PUBLIC_DOMAIN: "bright_green",
 }
 
+FILE_CATEGORY_COLORS: dict[DistributionFileCategory, str] = {
+    DistributionFileCategory.APPLICATION_BINARY: "bold cyan",
+    DistributionFileCategory.PYTHON_RUNTIME: "green",
+    DistributionFileCategory.COMPILER_ABI: "magenta",
+    DistributionFileCategory.NATIVE_LIBRARY: "bright_blue",
+    DistributionFileCategory.PYTHON_PACKAGE: "blue",
+    DistributionFileCategory.DATA_OR_METADATA: "dim",
+    DistributionFileCategory.UNACCOUNTED: "bold red",
+}
 
-def render_console_report(report: AuditReport, console: Console | None = None) -> None:
+
+def _format_size(size_bytes: int) -> str:
+    """Format byte count into human-readable size string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    if size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+
+
+def render_console_report(
+    report: AuditReport,
+    console: Console | None = None,
+    verbose: bool = False,
+) -> None:
     """Render a comprehensive human-readable compliance & security report to a Rich Console."""
     out = console or Console(safe_box=True)
 
     status_color = "green" if report.exit_code == ExitCode.OK else "bold red"
-    status_label = "PASSED" if report.exit_code == ExitCode.OK else f"FAILED ({report.exit_code.name}, exit={int(report.exit_code)})"
+    status_label = (
+        "PASSED"
+        if report.exit_code == ExitCode.OK
+        else f"FAILED ({report.exit_code.name}, exit={int(report.exit_code)})"
+    )
 
     header = Text()
     header.append("Target: ", style="bold")
@@ -137,7 +167,92 @@ def render_console_report(report: AuditReport, console: Console | None = None) -
             else "[green]Clean ($ORIGIN / standard)[/green]"
         )
         link_table.add_row("RPATH / RUNPATH Hygiene", rpath_str)
+
+        if report.file_inventory is not None:
+            fi = report.file_inventory
+            cov_pct = fi.coverage_percent
+            cov_style = "green" if cov_pct == 100.0 else "bold yellow"
+            counts = fi.counts_by_category()
+            parts = [
+                f"{counts[cat_val]} {cat_val.replace('-', ' ')}"
+                for cat_val in (
+                    DistributionFileCategory.APPLICATION_BINARY.value,
+                    DistributionFileCategory.PYTHON_RUNTIME.value,
+                    DistributionFileCategory.COMPILER_ABI.value,
+                    DistributionFileCategory.NATIVE_LIBRARY.value,
+                    DistributionFileCategory.PYTHON_PACKAGE.value,
+                    DistributionFileCategory.DATA_OR_METADATA.value,
+                )
+                if cat_val in counts
+            ]
+            counts_str = ", ".join(parts) or "0 classified"
+            link_table.add_row(
+                "Distribution File Coverage",
+                f"[{cov_style}]{cov_pct:.1f}%[/{cov_style}] ({fi.classified_count}/{fi.total_files} files classified: {counts_str})",
+            )
+            if fi.unaccounted_files:
+                unacc_names = ", ".join(f.path for f in fi.unaccounted_files[:5])
+                link_table.add_row(
+                    "Unaccounted Distribution Files",
+                    f"[bold red]{len(fi.unaccounted_files)} unclassified ({unacc_names})[/bold red]",
+                )
+
         out.print(link_table)
+    elif report.file_inventory is not None:
+        fi = report.file_inventory
+        cov_pct = fi.coverage_percent
+        cov_style = "green" if cov_pct == 100.0 else "bold yellow"
+        file_summary_table = Table(title="Distribution File Accounting & Coverage", safe_box=True)
+        file_summary_table.add_column("Metric", style="bold")
+        file_summary_table.add_column("Value")
+        file_summary_table.add_row("Total Distribution Files", str(fi.total_files))
+        file_summary_table.add_row("Total Size", _format_size(fi.total_bytes))
+        counts = fi.counts_by_category()
+        counts_str = ", ".join(f"{count} {cat.replace('-', ' ')}" for cat, count in sorted(counts.items()))
+        file_summary_table.add_row(
+            "Coverage",
+            f"[{cov_style}]{cov_pct:.1f}%[/{cov_style}] ({fi.classified_count}/{fi.total_files} files: {counts_str})",
+        )
+        if fi.unaccounted_files:
+            unacc_names = ", ".join(f.path for f in fi.unaccounted_files[:5])
+            file_summary_table.add_row(
+                "Unaccounted Files",
+                f"[bold red]{len(fi.unaccounted_files)} unclassified ({unacc_names})[/bold red]",
+            )
+        out.print(file_summary_table)
+
+    # 4. Detailed Distribution File Inventory Table (when verbose mode is active)
+    if verbose and report.file_inventory is not None:
+        fi = report.file_inventory
+        file_table = Table(
+            title=f"Distribution File Accounting & Inventory ({fi.total_files} files, {fi.coverage_percent:.1f}% classified, {_format_size(fi.total_bytes)})",
+            show_lines=False,
+            safe_box=True,
+        )
+        file_table.add_column("File Path", style="bold", overflow="fold")
+        file_table.add_column("Category", overflow="fold")
+        file_table.add_column("Attributed Component", overflow="fold")
+        file_table.add_column("Size", justify="right")
+        file_table.add_column("SHA-256", style="dim", overflow="fold")
+        file_table.add_column("Classification Details", overflow="fold")
+
+        for f_entry in fi.files:
+            cat_style = FILE_CATEGORY_COLORS.get(f_entry.category, "white")
+            comp_str = (
+                f"{f_entry.component_name}@{f_entry.component_version}"
+                if f_entry.component_version
+                else (f_entry.component_name or "—")
+            )
+            sha_str = f_entry.sha256[:12] + "…" if f_entry.sha256 else "—"
+            file_table.add_row(
+                f_entry.path,
+                f"[{cat_style}]{f_entry.category.value}[/{cat_style}]",
+                comp_str,
+                _format_size(f_entry.size_bytes),
+                sha_str,
+                f_entry.description,
+            )
+        out.print(file_table)
 
     # 4. Legal & Licensing Compliance Findings
     if report.compliance_findings:
@@ -204,11 +319,11 @@ def render_console_report(report: AuditReport, console: Console | None = None) -
     )
 
 
-def format_report_text(report: AuditReport) -> str:
+def format_report_text(report: AuditReport, verbose: bool = False) -> str:
     """Render the human-readable report to a plain-text string (without ANSI codes)."""
     buf = StringIO()
     console = Console(file=buf, force_terminal=False, color_system=None, width=120, safe_box=True)
-    render_console_report(report, console=console)
+    render_console_report(report, console=console, verbose=verbose)
     return buf.getvalue()
 
 

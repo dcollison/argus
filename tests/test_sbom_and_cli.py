@@ -108,7 +108,9 @@ dependencies = ["clean-pkg>=1.0.0"]
         "1.0.0",
         license_str="MIT",
         top_level=["clean_pkg"],
-        license_files={"LICENSE": "Copyright (c) 2024 Acme\nPermission is hereby granted, free of charge, to any person obtaining a copy"},
+        license_files={
+            "LICENSE": "Copyright (c) 2024 Acme\nPermission is hereby granted, free of charge, to any person obtaining a copy"
+        },
     )
 
     runner = CliRunner()
@@ -265,9 +267,7 @@ def test_sbom_malformed_urls_and_same_named_components() -> None:
     vulns_by_id = {v["id"]: v for v in cdx["vulnerabilities"]}
     assert vulns_by_id["CVE-2024-0001"]["affects"] == [{"ref": "pkg:pypi/openssl@3.2.1"}]
     assert vulns_by_id["CVE-2024-0002"]["affects"] == [{"ref": "pkg:generic/openssl@3.2.1"}]
-    assert vulns_by_id["CVE-2024-0001"]["advisories"] == [
-        {"url": "https://osv.dev/vulnerability/CVE-2024-0001"}
-    ]
+    assert vulns_by_id["CVE-2024-0001"]["advisories"] == [{"url": "https://osv.dev/vulnerability/CVE-2024-0001"}]
     for comp_entry in cdx["components"]:
         assert "externalReferences" not in comp_entry
 
@@ -375,8 +375,6 @@ dependencies = ["acme-internal-service>=1.0.0"]
     assert "Status: PASSED" in strip_ansi(res_allow_spdx.output)
 
 
-
-
 def test_cyclonedx_custom_licenseref_and_spdx_originator() -> None:
     from rhada.models import (
         AuditMode,
@@ -442,3 +440,99 @@ def test_cyclonedx_custom_licenseref_and_spdx_originator() -> None:
     # Pre-prefixed Person: Jane Doe should not have duplicate prefix
     orig_jane = spdx_pkgs["dual-tool"]["originator"]
     assert orig_jane == "Person: Jane Doe (jane@example.com)"
+
+
+def test_cli_distribution_file_inventory_verbose_and_full(tmp_path: Path) -> None:
+    ws = tmp_path / "app_ws"
+    ws.mkdir()
+    (ws / "pyproject.toml").write_text(
+        """[project]
+name = "inventory-app"
+version = "1.0.0"
+dependencies = []
+""",
+        encoding="utf-8",
+    )
+
+    dist_dir = tmp_path / "inventory-app.dist"
+    dist_dir.mkdir()
+    (dist_dir / "inventory-app.exe").write_bytes(b"MZapp")
+    (dist_dir / "python313.dll").write_bytes(b"MZpy")
+    (dist_dir / "vcruntime140.dll").write_bytes(b"MZvc")
+    (dist_dir / "report.xml").write_text("<report/>", encoding="utf-8")
+
+    runner = CliRunner(env={"COLUMNS": "160"})
+
+    # 1. Normal run (without verbose): summary includes Distribution File Coverage
+    res_normal = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--dist",
+            str(dist_dir),
+            "--offline",
+        ],
+    )
+    assert res_normal.exit_code == int(ExitCode.OK), res_normal.output
+    assert "Distribution File Coverage" in res_normal.output
+    assert "100.0%" in res_normal.output
+    assert "Distribution File Accounting & Inventory" not in res_normal.output
+
+    # 2. Verbose run (--verbose): includes full file inventory table
+    res_verbose = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--dist",
+            str(dist_dir),
+            "--offline",
+            "--verbose",
+        ],
+    )
+    assert res_verbose.exit_code == int(ExitCode.OK), res_verbose.output
+    assert "Distribution File Accounting & Inventory" in res_verbose.output
+    assert "inventory-app.exe" in res_verbose.output
+    assert "report.xml" in res_verbose.output
+    assert "application-binary" in res_verbose.output
+    assert "python-runtime" in res_verbose.output
+    assert "compiler-abi" in res_verbose.output
+    assert "data-metadata" in res_verbose.output
+
+    # 3. Full flag alias (--full) produces identical verbose table
+    res_full = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--dist",
+            str(dist_dir),
+            "--offline",
+            "--full",
+        ],
+    )
+    assert res_full.exit_code == int(ExitCode.OK), res_full.output
+    assert "Distribution File Accounting & Inventory" in res_full.output
+
+    # 4. JSON output format includes file_inventory dictionary
+    res_json = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--dist",
+            str(dist_dir),
+            "--offline",
+            "--format",
+            "json",
+        ],
+    )
+    assert res_json.exit_code == int(ExitCode.OK), res_json.output
+    report_dict = json.loads(res_json.output)
+    assert "file_inventory" in report_dict
+    inv = report_dict["file_inventory"]
+    assert inv["total_files"] == 4
+    assert inv["classified_count"] == 4
+    assert inv["unaccounted_count"] == 0
+    assert inv["coverage_percent"] == 100.0

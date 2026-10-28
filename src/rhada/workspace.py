@@ -77,6 +77,7 @@ class WorkspaceMetadata:
     project_description: str = ""
     project_license: str = "UNKNOWN"
     root_path: Path = field(default_factory=lambda: Path("."))
+    project_modules: set[str] = field(default_factory=set)
     direct_runtime_deps: set[str] = field(default_factory=set)
     direct_dev_deps: set[str] = field(default_factory=set)
     components: dict[str, Component] = field(default_factory=dict)
@@ -174,38 +175,40 @@ def _is_safe_relative_path(base_dir: Path, target_path: Path) -> bool:
         return False
 
 
-_BINARY_EXTENSIONS = frozenset({
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".ico",
-    ".bmp",
-    ".tiff",
-    ".webp",
-    ".pdf",
-    ".zip",
-    ".gz",
-    ".tgz",
-    ".bz2",
-    ".xz",
-    ".7z",
-    ".whl",
-    ".pyc",
-    ".pyo",
-    ".pyd",
-    ".so",
-    ".dll",
-    ".exe",
-    ".bin",
-    ".dat",
-    ".wasm",
-    ".o",
-    ".a",
-    ".dylib",
-    ".class",
-    ".jar",
-})
+_BINARY_EXTENSIONS = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".bmp",
+        ".tiff",
+        ".webp",
+        ".pdf",
+        ".zip",
+        ".gz",
+        ".tgz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".whl",
+        ".pyc",
+        ".pyo",
+        ".pyd",
+        ".so",
+        ".dll",
+        ".exe",
+        ".bin",
+        ".dat",
+        ".wasm",
+        ".o",
+        ".a",
+        ".dylib",
+        ".class",
+        ".jar",
+    }
+)
 
 
 def extract_extension_module_name(filename: str) -> str:
@@ -424,14 +427,16 @@ _NOTICE_PREFIXES = (
     "ATTRIBUTION",
     "CREDITS",
 )
-_IGNORED_RECORD_TOP_DIRS = frozenset({
-    "bin",
-    "scripts",
-    "include",
-    "share",
-    "etc",
-    "lib",
-})
+_IGNORED_RECORD_TOP_DIRS = frozenset(
+    {
+        "bin",
+        "scripts",
+        "include",
+        "share",
+        "etc",
+        "lib",
+    }
+)
 
 
 def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str], set[str]]:
@@ -451,7 +456,11 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
     version = _clean_metadata_field(msg.get("Version")) or "unknown"
     if not name or version == "unknown":
         # Fallback from directory name: foo_bar-1.2.3.dist-info or my-pkg-1.2.3.dist-info
-        stem = dist_info_dir.name.removesuffix(".dist-info") if dist_info_dir.name.endswith(".dist-info") else dist_info_dir.stem
+        stem = (
+            dist_info_dir.name.removesuffix(".dist-info")
+            if dist_info_dir.name.endswith(".dist-info")
+            else dist_info_dir.stem
+        )
         parsed_name, parsed_ver = split_dist_info_stem(stem)
         if not name:
             name = parsed_name
@@ -470,7 +479,9 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
             if not cand_url:
                 continue
             lbl_lower = label.lower()
-            if not source_url and any(k in lbl_lower for k in ("source", "repository", "repo", "code", "github", "gitlab", "bitbucket")):
+            if not source_url and any(
+                k in lbl_lower for k in ("source", "repository", "repo", "code", "github", "gitlab", "bitbucket")
+            ):
                 source_url = cand_url
             if not homepage and any(k in lbl_lower for k in ("home", "website", "documentation", "docs", "url")):
                 homepage = cand_url
@@ -584,12 +595,7 @@ def _inspect_dist_info(dist_info_dir: Path) -> tuple[Component | None, set[str],
     if record_file.is_file():
         for line in _read_text_safe(record_file, max_bytes=5_000_000).splitlines():
             path_part = line.split(",", 1)[0].strip().replace("\\", "/")
-            if (
-                not path_part
-                or ":" in path_part
-                or path_part.startswith(("/", "\\"))
-                or ".." in path_part.split("/")
-            ):
+            if not path_part or ":" in path_part or path_part.startswith(("/", "\\")) or ".." in path_part.split("/"):
                 continue
             first_seg = path_part.split("/", 1)[0]
             if (
@@ -700,19 +706,13 @@ def _discover_dist_native_libraries(
             parts = line.split(",")
             path_part = parts[0].strip().replace("\\", "/")
             hash_part = parts[1].strip() if len(parts) > 1 else ""
-            if (
-                not path_part
-                or ":" in path_part
-                or path_part.startswith(("/", "\\"))
-                or ".." in path_part.split("/")
-            ):
+            if not path_part or ":" in path_part or path_part.startswith(("/", "\\")) or ".." in path_part.split("/"):
                 continue
             leaf = path_part.split("/")[-1]
             leaf_lower = leaf.lower()
-            if (
-                leaf_lower.endswith((".py", ".pyc", ".pyo", ".txt", ".h", ".json", ".dist-info"))
-                or leaf_lower.startswith(".load-order-")
-            ):
+            if leaf_lower.endswith(
+                (".py", ".pyc", ".pyo", ".txt", ".h", ".json", ".dist-info")
+            ) or leaf_lower.startswith(".load-order-"):
                 continue
 
             is_so = ".so" in leaf_lower
@@ -859,13 +859,15 @@ def _discover_dist_native_libraries(
         sp_dir / pkg_comp.name.replace("-", "_") / "libs",
     ]
     for mod in pkg_comp.top_level_modules:
-        candidate_libs_dirs.extend([
-            sp_dir / f"{mod}.libs",
-            sp_dir / f"{mod}.dylibs",
-            sp_dir / mod / ".libs",
-            sp_dir / mod / "extra-dll",
-            sp_dir / mod / "libs",
-        ])
+        candidate_libs_dirs.extend(
+            [
+                sp_dir / f"{mod}.libs",
+                sp_dir / f"{mod}.dylibs",
+                sp_dir / mod / ".libs",
+                sp_dir / mod / "extra-dll",
+                sp_dir / mod / "libs",
+            ]
+        )
 
     for libs_dir in candidate_libs_dirs:
         if libs_dir.is_dir():
@@ -901,6 +903,7 @@ def _discover_dist_native_libraries(
                                 is_binary_file,
                                 parse_binary,
                             )
+
                             if cand_dll_path.is_file() and is_binary_file(cand_dll_path):
                                 with contextlib.suppress(OSError, ValueError, RuntimeError):
                                     b_info = parse_binary(cand_dll_path)
@@ -1092,7 +1095,7 @@ def _parse_nuitka_tokens(tokens: list[str], directives: dict[str, list[str]]) ->
             ("--nofollow-import-to", "nofollow_imports"),
         ):
             if token.startswith(f"{flag}="):
-                val = token[len(flag) + 1:].strip()
+                val = token[len(flag) + 1 :].strip()
                 if val and val not in directives[key]:
                     directives[key].append(val)
                 break
@@ -1311,9 +1314,7 @@ def _parse_setup_cfg(setup_cfg_path: Path) -> dict[str, Any]:
             opt: dict[str, list[str]] = {}
             for opt_name, raw_val in cp.items("options.extras_require", raw=True):
                 group_reqs = [
-                    line.strip()
-                    for line in raw_val.splitlines()
-                    if line.strip() and not line.strip().startswith("#")
+                    line.strip() for line in raw_val.splitlines() if line.strip() and not line.strip().startswith("#")
                 ]
                 if group_reqs:
                     opt[opt_name] = group_reqs
@@ -1342,6 +1343,130 @@ def _parse_requirements_txt(req_path: Path) -> list[str]:
             continue
         reqs.append(cleaned)
     return reqs
+
+
+def _discover_project_source_modules(
+    project_path: Path,
+    pyproject_data: dict[str, Any],
+    ws: WorkspaceMetadata,
+) -> None:
+    """Discover all first-party Python package and module names defined in the local project workspace."""
+    # 1. Project name variants
+    for p in (ws.project_name, ws.project_name.replace("-", "_"), normalize_pkg_name(ws.project_name)):
+        if p and p != "unknown-project":
+            ws.project_modules.add(p)
+            ws.module_to_package[p] = ws.project_name
+            ws.module_to_package[p.lower()] = ws.project_name
+
+    # 2. Declared packages in pyproject.toml
+    hatch_pkgs = (
+        pyproject_data.get("tool", {})
+        .get("hatch", {})
+        .get("build", {})
+        .get("targets", {})
+        .get("wheel", {})
+        .get("packages", [])
+    )
+    if isinstance(hatch_pkgs, list):
+        for hp in hatch_pkgs:
+            if isinstance(hp, str) and hp.strip():
+                clean_hp = hp.strip().replace("\\", "/").strip("/")
+                leaf = clean_hp.split("/")[-1]
+                ws.project_modules.add(leaf)
+                ws.module_to_package[leaf] = ws.project_name
+                ws.module_to_package[leaf.lower()] = ws.project_name
+
+    flit_name = pyproject_data.get("tool", {}).get("flit", {}).get("module", {}).get("name")
+    if isinstance(flit_name, str) and flit_name.strip():
+        ws.project_modules.add(flit_name.strip())
+        ws.module_to_package[flit_name.strip()] = ws.project_name
+        ws.module_to_package[flit_name.strip().lower()] = ws.project_name
+
+    poetry_pkgs = pyproject_data.get("tool", {}).get("poetry", {}).get("packages", [])
+    if isinstance(poetry_pkgs, list):
+        for entry in poetry_pkgs:
+            if isinstance(entry, dict) and "include" in entry:
+                p_inc = str(entry["include"]).strip()
+                if p_inc:
+                    ws.project_modules.add(p_inc)
+                    ws.module_to_package[p_inc] = ws.project_name
+                    ws.module_to_package[p_inc.lower()] = ws.project_name
+
+    st_pkgs = pyproject_data.get("tool", {}).get("setuptools", {}).get("packages", [])
+    if isinstance(st_pkgs, list):
+        for entry in st_pkgs:
+            if isinstance(entry, str) and entry.strip():
+                ws.project_modules.add(entry.strip())
+                ws.module_to_package[entry.strip()] = ws.project_name
+                ws.module_to_package[entry.strip().lower()] = ws.project_name
+
+    # 3. Filesystem inspection of local project source trees
+    ignored_dirs = {
+        ".git",
+        ".github",
+        ".venv",
+        "venv",
+        "env",
+        ".env",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+        "build",
+        "dist",
+        "tests",
+        "test",
+        "docs",
+        "doc",
+        "node_modules",
+        "site-packages",
+    }
+
+    search_roots = [project_path]
+    src_dir = project_path / "src"
+    if src_dir.is_dir():
+        search_roots.append(src_dir)
+
+    for s_root in search_roots:
+        try:
+            for item in s_root.iterdir():
+                if not item.is_dir() or item.name.lower() in ignored_dirs or item.name.startswith((".", "_")):
+                    continue
+                # If directory contains __init__.py, it is a package
+                if (item / "__init__.py").is_file():
+                    top_name = item.name
+                    ws.project_modules.add(top_name)
+                    ws.module_to_package[top_name] = ws.project_name
+                    ws.module_to_package[top_name.lower()] = ws.project_name
+                    try:
+                        for sub in item.rglob("__init__.py"):
+                            rel_parent = sub.parent.relative_to(item)
+                            if rel_parent != Path("."):
+                                dotted = f"{top_name}.{'.'.join(rel_parent.parts)}"
+                                ws.project_modules.add(dotted)
+                                ws.module_to_package[dotted] = ws.project_name
+                                ws.module_to_package[dotted.lower()] = ws.project_name
+                    except OSError:
+                        pass
+                else:
+                    # Also check subdirectories for packages (e.g. entrypoint_pkg/banana)
+                    try:
+                        for sub in item.iterdir():
+                            if sub.is_dir() and (sub / "__init__.py").is_file() and sub.name not in ignored_dirs:
+                                sub_name = sub.name
+                                ws.project_modules.add(sub_name)
+                                ws.module_to_package[sub_name] = ws.project_name
+                                ws.module_to_package[sub_name.lower()] = ws.project_name
+                                for subsub in sub.rglob("__init__.py"):
+                                    rel_sub = subsub.parent.relative_to(sub)
+                                    if rel_sub != Path("."):
+                                        dotted = f"{sub_name}.{'.'.join(rel_sub.parts)}"
+                                        ws.project_modules.add(dotted)
+                                        ws.module_to_package[dotted] = ws.project_name
+                                        ws.module_to_package[dotted.lower()] = ws.project_name
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
 
 def inspect_workspace(project_path: Path, include_dev: bool = False) -> WorkspaceMetadata:
@@ -1580,11 +1705,7 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
             else:
                 lock_map[pname] = pkg_entry
             source = pkg_entry.get("source", {})
-            if isinstance(source, dict) and (
-                "virtual" in source
-                or "editable" in source
-                or "directory" in source
-            ):
+            if isinstance(source, dict) and ("virtual" in source or "editable" in source or "directory" in source):
                 root_pkg_names.add(pname)
             if pname == ws.project_name:
                 root_pkg_names.add(pname)
@@ -1684,7 +1805,11 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                     comp.discovery_evidence.insert(0, "uv.lock")
             else:
                 inferred_mods = sorted({pname.replace("-", "_"), *KNOWN_PACKAGE_TOP_MODULES.get(pname, [])})
-                p_src = f"https://pypi.org/project/{pname}/{pver}/#files" if pver != "unknown" else f"https://pypi.org/project/{pname}/"
+                p_src = (
+                    f"https://pypi.org/project/{pname}/{pver}/#files"
+                    if pver != "unknown"
+                    else f"https://pypi.org/project/{pname}/"
+                )
                 comp = Component(
                     name=pname,
                     version=pver,
@@ -1803,5 +1928,7 @@ def inspect_workspace(project_path: Path, include_dev: bool = False) -> Workspac
                 ws.elf_binaries.append(b_info)
             if nat_comp.name not in ws.components:
                 ws.components[nat_comp.name] = nat_comp
+
+    _discover_project_source_modules(project_path, pyproject_data, ws)
 
     return ws

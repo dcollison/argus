@@ -56,6 +56,18 @@ class ComponentType(StrEnum):
     RUNTIME = "runtime"
 
 
+class DistributionFileCategory(StrEnum):
+    """Classification category for files within a compiled distribution."""
+
+    APPLICATION_BINARY = "application-binary"
+    PYTHON_RUNTIME = "python-runtime"
+    COMPILER_ABI = "compiler-abi"
+    NATIVE_LIBRARY = "native-library"
+    PYTHON_PACKAGE = "python-package"
+    DATA_OR_METADATA = "data-metadata"
+    UNACCOUNTED = "unaccounted"
+
+
 class ComponentScope(StrEnum):
     """Dependency scope of a component."""
 
@@ -412,6 +424,70 @@ class ComplianceFinding:
 
 
 @dataclass(slots=True)
+class DistributionFileInfo:
+    """Detailed accounting entry for a file in a compiled distribution."""
+
+    path: str
+    category: DistributionFileCategory
+    component_name: str | None = None
+    component_version: str | None = None
+    size_bytes: int = 0
+    sha256: str | None = None
+    description: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "category": self.category.value,
+            "component_name": self.component_name,
+            "component_version": self.component_version,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+            "description": self.description,
+        }
+
+
+@dataclass(slots=True)
+class DistributionFileInventory:
+    """Aggregated file coverage and accounting report for a compiled distribution."""
+
+    total_files: int = 0
+    total_bytes: int = 0
+    files: list[DistributionFileInfo] = field(default_factory=list)
+
+    @property
+    def classified_count(self) -> int:
+        return sum(1 for f in self.files if f.category != DistributionFileCategory.UNACCOUNTED)
+
+    @property
+    def unaccounted_files(self) -> list[DistributionFileInfo]:
+        return [f for f in self.files if f.category == DistributionFileCategory.UNACCOUNTED]
+
+    @property
+    def coverage_percent(self) -> float:
+        if self.total_files == 0:
+            return 100.0
+        return (self.classified_count / self.total_files) * 100.0
+
+    def counts_by_category(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for f in self.files:
+            counts[f.category.value] = counts.get(f.category.value, 0) + 1
+        return counts
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total_files": self.total_files,
+            "total_bytes": self.total_bytes,
+            "classified_count": self.classified_count,
+            "unaccounted_count": len(self.unaccounted_files),
+            "coverage_percent": round(self.coverage_percent, 1),
+            "counts_by_category": self.counts_by_category(),
+            "files": [f.to_dict() for f in self.files],
+        }
+
+
+@dataclass(slots=True)
 class AuditConfig:
     """Configuration for a Rhada audit run."""
 
@@ -420,6 +496,7 @@ class AuditConfig:
     compilation_report_path: Path | None = None
     include_dev: bool = False
     offline: bool = False
+    verbose: bool = False
     osv_timeout: float = 15.0
     fail_on_severity: Severity = Severity.HIGH
     fail_on_license: Severity = Severity.HIGH
@@ -449,25 +526,18 @@ class AuditReport:
     excluded_components: list[Component] = field(default_factory=list)
     compliance_findings: list[ComplianceFinding] = field(default_factory=list)
     linkage_report: BinaryLinkageReport | None = None
+    file_inventory: DistributionFileInventory | None = None
     exit_code: ExitCode = ExitCode.OK
     warnings: list[str] = field(default_factory=list)
     disclaimer: str = LEGAL_DISCLAIMER
 
     @property
     def bundled_python_components(self) -> list[Component]:
-        return [
-            c
-            for c in self.components
-            if c.component_type == ComponentType.PYTHON_PACKAGE and c.is_bundled
-        ]
+        return [c for c in self.components if c.component_type == ComponentType.PYTHON_PACKAGE and c.is_bundled]
 
     @property
     def native_components(self) -> list[Component]:
-        return [
-            c
-            for c in self.components
-            if c.component_type == ComponentType.NATIVE_LIBRARY and c.is_bundled
-        ]
+        return [c for c in self.components if c.component_type == ComponentType.NATIVE_LIBRARY and c.is_bundled]
 
     @property
     def all_vulnerabilities(self) -> list[Vulnerability]:
@@ -502,6 +572,10 @@ class AuditReport:
                 "total_vulnerabilities": len(self.all_vulnerabilities),
                 "vulnerabilities_by_severity": self.vulnerability_counts_by_severity(),
                 "compliance_findings_count": len(self.compliance_findings),
+                "file_coverage_percent": round(self.file_inventory.coverage_percent, 1)
+                if self.file_inventory
+                else None,
+                "unaccounted_files_count": len(self.file_inventory.unaccounted_files) if self.file_inventory else 0,
                 "exit_code": int(self.exit_code),
                 "passed": self.exit_code == ExitCode.OK,
             },
@@ -509,6 +583,7 @@ class AuditReport:
             "excluded_components": [c.to_dict() for c in self.excluded_components],
             "compliance_findings": [f.to_dict() for f in self.compliance_findings],
             "linkage_report": self.linkage_report.to_dict() if self.linkage_report else None,
+            "file_inventory": self.file_inventory.to_dict() if self.file_inventory else None,
             "warnings": list(self.warnings),
             "disclaimer": self.disclaimer,
         }

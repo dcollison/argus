@@ -87,7 +87,30 @@ For packages governed by the GNU Lesser General Public License (LGPL-2.0, LGPL-2
 - Discovered source links are included directly in `LIC-LGPL-DYNAMIC` and `LIC-LGPL-MONOLITHIC` compliance findings and embedded into CycloneDX (`vcs`) and SPDX (`downloadLocation`) SBOMs.
 - `THIRD_PARTY_NOTICES` includes a dedicated **LGPL Compliance & Source Code Offer** section providing exact source code download locations and written offer statements.
 
-### 5. Subcommands
+### 5. Distribution File Accounting & Inventory (`--verbose` / `--full`)
+
+When auditing a compiled distribution directory (`--dist`), Rhada performs full file inventory accounting to verify that every distributed file is attributed and accounted for:
+- **Application Binaries (`application-binary`)**: Main entrypoint executables and first-party compiled modules. First-party packages and submodules (configured in `pyproject.toml` or discovered in the source tree) are properly recognized as project source rather than flagged as unknown third-party packages.
+- **Python Runtime (`python-runtime`)**: CPython runtime shared libraries (`python313.dll`, `libpython3.so`) and standard library C-extensions (`select.pyd`, `_socket.pyd`, etc., licensed under `PSF-2.0`).
+- **Compiler / Platform ABI (`compiler-abi`)**: Standard compiler runtimes and platform ABIs (`vcruntime140.dll`, `msvcp140.dll`, `ucrtbase.dll`, `libc.so`, etc.).
+- **Native Shared Libraries (`native-library`)**: Discovered or vendored third-party shared libraries (`libcrypto`, `libssl`, `libopenblas`, etc.).
+- **Python Packages (`python-package`)**: Bundled third-party wheels, bytecode, and extension libraries.
+- **Metadata (`data-metadata`)**: Compilation reports, license files, notices, SBOMs, and manifest files.
+- **Unaccounted Files (`unaccounted`)**: Any unrecognized loose file that may require audit or review.
+
+By default, the audit summary reports the overall coverage percentage:
+```text
+Distribution File Coverage: 100.0% (32/32 files classified: 1 application binary, 25 python runtime, 4 compiler abi, 2 data metadata)
+```
+
+Pass `--verbose` (or `-v`, `--full`) to render the complete line-by-line inventory table detailing the relative file path, category, attributed component, file size, SHA-256 hash, and classification details:
+```bash
+uv run rhada --project . --dist ./dist/my-app.dist --compilation-report ./dist/report.xml --verbose
+```
+
+The complete inventory is also serialized under `file_inventory` in JSON reports (`--format json` or `--report-json`).
+
+### 6. Subcommands
 
 ```bash
 # Generate SBOM to stdout or file

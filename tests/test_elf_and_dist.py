@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rhada.dist import correlate_workspace_and_dist, inspect_compiled_distribution
+from rhada.dist import (
+    build_distribution_file_inventory,
+    correlate_workspace_and_dist,
+    inspect_compiled_distribution,
+)
 from rhada.elf import (
     _parse_elf_struct_fallback,
     elf_to_native_component,
@@ -14,6 +18,9 @@ from rhada.elf import (
 )
 from rhada.models import (
     BundlerType,
+    Component,
+    ComponentType,
+    DistributionFileCategory,
     DistributionLayout,
     LicenseRiskCategory,
     LinkageStatus,
@@ -119,7 +126,9 @@ dev = ["pytest>=8.0.0", "nuitka>=2.1.0"]
     )
     sp = ws_dir / ".venv" / "Lib" / "site-packages"
     create_dist_info(sp, "httpx", "0.27.0", license_str="BSD-3-Clause", top_level=["httpx"])
-    create_dist_info(sp, "cryptography", "42.0.5", license_expression="Apache-2.0 OR BSD-3-Clause", top_level=["cryptography"])
+    create_dist_info(
+        sp, "cryptography", "42.0.5", license_expression="Apache-2.0 OR BSD-3-Clause", top_level=["cryptography"]
+    )
     create_dist_info(sp, "pytest", "8.1.1", license_str="MIT", top_level=["pytest"])
     create_dist_info(sp, "nuitka", "2.1.2", license_str="Apache-2.0", top_level=["nuitka"])
 
@@ -208,3 +217,130 @@ def test_pyinstaller_monolithic_onefile_binary_inspection(tmp_path: Path) -> Non
     assert "markupsafe" in res.bundled_modules
     assert res.discovered_distributions.get("click") == "8.1.7"
     assert any(n.name == "openssl" and n.version == "3.1.4" for n in res.native_components)
+
+
+def test_nuitka_compilation_report_first_party_and_nested_modules(tmp_path: Path) -> None:
+    # Workspace project
+    proj_dir = tmp_path / "my_app"
+    proj_dir.mkdir()
+    (proj_dir / "pyproject.toml").write_text(
+        """[project]
+name = "my_app"
+version = "1.0.0"
+dependencies = ["httpx>=0.27.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["my_pkg"]
+""",
+        encoding="utf-8",
+    )
+    src_pkg = proj_dir / "my_pkg" / "nested"
+    src_pkg.mkdir(parents=True)
+    (proj_dir / "my_pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (src_pkg / "__init__.py").write_text("def run(): pass\n", encoding="utf-8")
+
+    ws = inspect_workspace(proj_dir)
+    assert "my_pkg" in ws.project_modules
+    assert "my_pkg.nested" in ws.project_modules
+
+    dist_dir = tmp_path / "my_app.dist"
+    dist_dir.mkdir()
+    (dist_dir / "report.xml").write_text(
+        """<?xml version="1.0" encoding="utf8"?>
+<nuitka-compilation-report nuitka_version="2.1.2">
+  <module name="__main__" kind="PythonMainModule" usage="root_module" source_path="${cwd}/entrypoint.py" />
+  <module name="my_pkg" kind="CompiledPythonPackage" source_path="${cwd}/my_pkg/__init__.py" />
+  <module name="my_pkg.nested" kind="CompiledPythonPackage" source_path="${cwd}/my_pkg/nested/__init__.py" />
+  <module name="httpx" kind="compiled_module" distribution="httpx" source_path="${sys.prefix}/Lib/site-packages/httpx/__init__.py" />
+  <distributions>
+    <distribution name="httpx" version="0.27.0" />
+  </distributions>
+</nuitka-compilation-report>
+""",
+        encoding="utf-8",
+    )
+
+    res = inspect_compiled_distribution(dist_dir, compilation_report_path=dist_dir / "report.xml")
+    assert "my_pkg" in res.project_modules
+    assert "my_pkg.nested" in res.project_modules
+    assert "my_pkg" not in res.bundled_modules
+    assert "my_pkg.nested" not in res.bundled_modules
+    assert "httpx" in res.bundled_modules
+
+    active, _excluded = correlate_workspace_and_dist(ws, res)
+    active_names = {c.name for c in active}
+    assert "httpx" in active_names
+    assert "my-pkg" not in active_names
+    assert "my-pkg-nested" not in active_names
+    assert "my_pkg" not in active_names
+    assert "my_pkg.nested" not in active_names
+
+
+def test_build_distribution_file_inventory(tmp_path: Path) -> None:
+    dist_dir = tmp_path / "app.dist"
+    dist_dir.mkdir()
+
+    # Application binary
+    (dist_dir / "app.exe").write_bytes(b"MZapp binary")
+
+    # Python runtime and stdlib
+    (dist_dir / "python313.dll").write_bytes(b"MZpython runtime")
+    (dist_dir / "select.pyd").write_bytes(b"MZselect extension")
+
+    # Compiler ABI
+    (dist_dir / "vcruntime140.dll").write_bytes(b"MZmsvc runtime")
+
+    # Native library
+    (dist_dir / "libcrypto-3-x64.dll").write_bytes(b"MZopenssl crypto")
+
+    # Python package
+    pkg_dir = dist_dir / "requests"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("# requests\n", encoding="utf-8")
+
+    # Metadata
+    (dist_dir / "compilation-report.xml").write_text("<report/>", encoding="utf-8")
+
+    # Unaccounted mystery file
+    (dist_dir / "mystery.bin").write_bytes(b"\x00\x01\x02")
+
+    components = [
+        Component(
+            name="requests",
+            version="2.31.0",
+            component_type=ComponentType.PYTHON_PACKAGE,
+            top_level_modules=["requests"],
+        ),
+    ]
+    native_components = [
+        Component(
+            name="openssl",
+            version="3.0.0",
+            component_type=ComponentType.NATIVE_LIBRARY,
+            bundled_files=["libcrypto-3-x64.dll"],
+        )
+    ]
+
+    inventory = build_distribution_file_inventory(
+        dist_path=dist_dir,
+        target_name="app",
+        target_version="1.0.0",
+        components=components,
+        native_components=native_components,
+    )
+
+    assert inventory.total_files == 8
+    assert inventory.classified_count == 7
+    assert len(inventory.unaccounted_files) == 1
+    assert inventory.coverage_percent == 87.5
+    assert [f.path for f in inventory.unaccounted_files] == ["mystery.bin"]
+
+    cat_map = {f.path: f.category for f in inventory.files}
+    assert cat_map["app.exe"] == DistributionFileCategory.APPLICATION_BINARY
+    assert cat_map["python313.dll"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert cat_map["select.pyd"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert cat_map["vcruntime140.dll"] == DistributionFileCategory.COMPILER_ABI
+    assert cat_map["libcrypto-3-x64.dll"] == DistributionFileCategory.NATIVE_LIBRARY
+    assert cat_map["requests/__init__.py"] == DistributionFileCategory.PYTHON_PACKAGE
+    assert cat_map["compilation-report.xml"] == DistributionFileCategory.DATA_OR_METADATA
+    assert cat_map["mystery.bin"] == DistributionFileCategory.UNACCOUNTED

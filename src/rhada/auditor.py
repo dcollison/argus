@@ -5,7 +5,11 @@ from __future__ import annotations
 import httpx
 
 from rhada.compliance import evaluate_compliance, write_third_party_notices
-from rhada.dist import correlate_workspace_and_dist, inspect_compiled_distribution
+from rhada.dist import (
+    build_distribution_file_inventory,
+    correlate_workspace_and_dist,
+    inspect_compiled_distribution,
+)
 from rhada.models import (
     AuditConfig,
     AuditMode,
@@ -29,12 +33,8 @@ def compute_exit_code(report: AuditReport, config: AuditConfig) -> ExitCode:
     - 3: COMBINED_POLICY_FAILURE (both vulnerability and licence failures)
     - 4: LINKAGE_FAILURE (when fail_on_linkage is enabled and linkage is not self-contained)
     """
-    has_vuln_failure = any(
-        v.severity.meets_threshold(config.fail_on_severity) for v in report.all_vulnerabilities
-    )
-    has_license_failure = any(
-        f.severity.meets_threshold(config.fail_on_license) for f in report.compliance_findings
-    )
+    has_vuln_failure = any(v.severity.meets_threshold(config.fail_on_severity) for v in report.all_vulnerabilities)
+    has_license_failure = any(f.severity.meets_threshold(config.fail_on_license) for f in report.compliance_findings)
 
     if has_vuln_failure and has_license_failure:
         return ExitCode.COMBINED_POLICY_FAILURE
@@ -43,11 +43,7 @@ def compute_exit_code(report: AuditReport, config: AuditConfig) -> ExitCode:
     if has_license_failure:
         return ExitCode.LICENSE_FAILURE
 
-    if (
-        config.fail_on_linkage
-        and report.linkage_report is not None
-        and not report.linkage_report.is_self_contained
-    ):
+    if config.fail_on_linkage and report.linkage_report is not None and not report.linkage_report.is_self_contained:
         return ExitCode.LINKAGE_FAILURE
 
     return ExitCode.OK
@@ -114,6 +110,25 @@ def run_audit(
             linkage_report=dist_res.linkage_report,
             warnings=list(dist_res.warnings),
         )
+
+        # Build distribution file accounting inventory
+        all_native = report.native_components or (dist_res.native_components if dist_res else [])
+        report.file_inventory = build_distribution_file_inventory(
+            dist_path=dist_path,
+            target_name=target_name,
+            target_version=ws.project_version,
+            components=report.components,
+            native_components=all_native,
+            ws=ws,
+            dist_res=dist_res,
+        )
+        if report.file_inventory.unaccounted_files:
+            unacc_count = len(report.file_inventory.unaccounted_files)
+            sample = ", ".join(f.path for f in report.file_inventory.unaccounted_files[:3])
+            report.warnings.append(
+                f"{unacc_count} unaccounted file(s) found in distribution directory (e.g. {sample}). "
+                "Run with --verbose to view complete distribution file inventory."
+            )
 
     # Evaluate legal & licensing compliance
     report.compliance_findings = evaluate_compliance(
