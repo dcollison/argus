@@ -259,6 +259,8 @@ class Component:
     soname: str | None = None
 
     def __post_init__(self) -> None:
+        if self.version in ("0.0.0", "0"):
+            self.version = "unknown"
         if not self.purl:
             self.refresh_purl()
 
@@ -437,6 +439,10 @@ class DistributionFileInfo:
     sha256: str | None = None
     description: str = ""
 
+    def __post_init__(self) -> None:
+        if self.component_version in ("0.0.0", "0"):
+            self.component_version = "unknown"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "path": self.path,
@@ -534,6 +540,10 @@ class AuditReport:
     exit_code: ExitCode = ExitCode.OK
     warnings: list[str] = field(default_factory=list)
     disclaimer: str = LEGAL_DISCLAIMER
+
+    def __post_init__(self) -> None:
+        if self.target_version in ("0.0.0", "0.0.1", "0", ""):
+            self.target_version = "unknown"
 
     @property
     def bundled_python_components(self) -> list[Component]:

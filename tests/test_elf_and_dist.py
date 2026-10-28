@@ -17,10 +17,14 @@ from rhada.elf import (
     verify_binary_linkage,
 )
 from rhada.models import (
+    AuditMode,
+    AuditReport,
     BundlerType,
     Component,
     ComponentType,
     DistributionFileCategory,
+    DistributionFileInfo,
+    DistributionFileInventory,
     DistributionLayout,
     LicenseRiskCategory,
     LinkageStatus,
@@ -344,3 +348,137 @@ def test_build_distribution_file_inventory(tmp_path: Path) -> None:
     assert cat_map["requests/__init__.py"] == DistributionFileCategory.PYTHON_PACKAGE
     assert cat_map["compilation-report.xml"] == DistributionFileCategory.DATA_OR_METADATA
     assert cat_map["mystery.bin"] == DistributionFileCategory.UNACCOUNTED
+
+
+def test_build_distribution_file_inventory_linux_bare_so_stdlib(tmp_path: Path) -> None:
+    """Verify bare Linux .so standard library modules (_blake2.so, _bz2.so, _codecs_cn.so) are attributed to python."""
+    dist_dir = tmp_path / "linux_dist"
+    dist_dir.mkdir()
+    (dist_dir / "my_app.bin").write_bytes(b"\x7fELFfake_exe")
+    (dist_dir / "libpython3.12.so.1.0").write_bytes(b"\x7fELFfakepy")
+    (dist_dir / "_blake2.so").write_bytes(b"\x7fELFblake2")
+    (dist_dir / "_bz2.so").write_bytes(b"\x7fELFbz2")
+    (dist_dir / "_codecs_cn.so").write_bytes(b"\x7fELFcodecs")
+    (dist_dir / "_ssl.so").write_bytes(b"\x7fELFssl")
+    (dist_dir / "_ctypes.so").write_bytes(b"\x7fELFctypes")
+    (dist_dir / "math.so").write_bytes(b"\x7fELFmath")
+    (dist_dir / "select.so").write_bytes(b"\x7fELFselect")
+
+    # Third-party package
+    pkg_dir = dist_dir / "requests"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("# requests", encoding="utf-8")
+
+    # Native lib
+    (dist_dir / "libz.so.1").write_bytes(b"\x7fELFzlib")
+
+    components = [
+        Component(
+            name="python",
+            version="3.12.3",
+            component_type=ComponentType.PYTHON_PACKAGE,
+            is_bundled=True,
+        ),
+        Component(
+            name="requests",
+            version="2.31.0",
+            component_type=ComponentType.PYTHON_PACKAGE,
+            top_level_modules=["requests"],
+            is_bundled=True,
+        ),
+    ]
+    native_components = [
+        Component(
+            name="zlib",
+            version="1.3.1",
+            component_type=ComponentType.NATIVE_LIBRARY,
+            bundled_files=["libz.so.1"],
+            is_bundled=True,
+        )
+    ]
+
+    inventory = build_distribution_file_inventory(
+        dist_path=dist_dir,
+        target_name="my_app",
+        target_version="1.0.0",
+        components=components,
+        native_components=native_components,
+    )
+
+    cat_map = {f.path: f.category for f in inventory.files}
+    comp_map = {f.path: f.component_name for f in inventory.files}
+    desc_map = {f.path: f.description for f in inventory.files}
+
+    assert cat_map["my_app.bin"] == DistributionFileCategory.APPLICATION_BINARY
+    assert cat_map["libpython3.12.so.1.0"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert cat_map["_blake2.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["_blake2.so"] == "python"
+    assert "CPython standard library C-extension (_blake2)" in desc_map["_blake2.so"]
+
+    assert cat_map["_bz2.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["_bz2.so"] == "python"
+
+    assert cat_map["_codecs_cn.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["_codecs_cn.so"] == "python"
+
+    assert cat_map["_ssl.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["_ssl.so"] == "python"
+
+    assert cat_map["_ctypes.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["_ctypes.so"] == "python"
+
+    assert cat_map["math.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["math.so"] == "python"
+
+    assert cat_map["select.so"] == DistributionFileCategory.PYTHON_RUNTIME
+    assert comp_map["select.so"] == "python"
+
+    assert cat_map["requests/__init__.py"] == DistributionFileCategory.PYTHON_PACKAGE
+    assert cat_map["libz.so.1"] == DistributionFileCategory.NATIVE_LIBRARY
+    assert inventory.coverage_percent == 100.0
+
+
+def test_unidentified_version_explicit_unknown() -> None:
+    """Verify unidentified versions are normalized to 'unknown' rather than placeholder '0.0.0'."""
+    from rhada.elf import _infer_library_identity
+    from rhada.reporter import format_report_text
+    from rhada.workspace import WorkspaceMetadata
+
+    # 1. Workspace default
+    ws = WorkspaceMetadata(root_path=Path("."))
+    assert ws.project_version == "unknown"
+
+    # 2. Component normalization
+    comp = Component(name="my-internal-pkg", version="0.0.0")
+    assert comp.version == "unknown"
+    assert comp.purl == "pkg:pypi/my-internal-pkg"
+
+    # 3. DistributionFileInfo normalization
+    finfo = DistributionFileInfo(
+        path="foo.bin",
+        category=DistributionFileCategory.APPLICATION_BINARY,
+        component_name="my-app",
+        component_version="0.0.0",
+    )
+    assert finfo.component_version == "unknown"
+
+    # 4. AuditReport normalization
+    rep = AuditReport(
+        target_name="my-app",
+        target_version="0.0.0",
+        mode=AuditMode.COMPILED_DIST,
+        components=[comp],
+    )
+    assert rep.target_version == "unknown"
+
+    # 5. Native library SONAME libtool ABI .so.0.0.0 is not treated as software version 0.0.0
+    det_lib, det_ver = _infer_library_identity("libquadmath-96973f99.so.0.0.0", "libquadmath.so.0.0.0", [])
+    assert det_lib == "libquadmath"
+    assert det_ver == "unknown"  # Explicitly 'unknown', not '0.0.0'
+
+    # 6. CLI report output formatting
+    rep.file_inventory = DistributionFileInventory(files=[finfo], total_files=1, total_bytes=10)
+    cli_out = format_report_text(rep, verbose=True)
+    assert "unknown" in cli_out
+    assert "@0.0.0" not in cli_out
+

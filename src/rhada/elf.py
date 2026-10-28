@@ -409,7 +409,9 @@ def _infer_library_identity(
             ver_inline = m.group(2)
             ver_suffix = m.group(3)
             detected_lib = prefix.lower()
-            detected_ver = ver_inline or ver_suffix
+            cand_ver = ver_inline or ver_suffix
+            if cand_ver and cand_ver not in {"0.0.0", "0.0", "0"}:
+                detected_ver = cand_ver
 
     if not detected_lib:
         # Handle libpython3.11.so.1.0 or Windows python312.dll / python3.dll
@@ -434,7 +436,9 @@ def _infer_library_identity(
                     if dll_m:
                         detected_lib = dll_m.group(1).lower().rstrip("_")
                         if dll_m.group(2):
-                            detected_ver = dll_m.group(2).replace("_", ".")
+                            cand_ver = dll_m.group(2).replace("_", ".")
+                            if cand_ver not in {"0.0.0", "0.0", "0"}:
+                                detected_ver = cand_ver
             elif cleaned_base.startswith("lib") and ".so" in cleaned_base:
                 detected_lib = cleaned_base.split(".so", 1)[0].split("-", 1)[0].lower().rstrip("_")
 
