@@ -536,3 +536,52 @@ dependencies = []
     assert inv["classified_count"] == 4
     assert inv["unaccounted_count"] == 0
     assert inv["coverage_percent"] == 100.0
+
+
+def test_cli_internal_and_ignore_package_flags(tmp_path: Path) -> None:
+    ws = tmp_path / "cli_ws"
+    ws.mkdir()
+    (ws / "pyproject.toml").write_text(
+        """[project]
+name = "cli-test-app"
+version = "1.0.0"
+dependencies = ["corp-utils>=1.0.0", "legacy-lib>=0.1.0"]
+""",
+        encoding="utf-8",
+    )
+    sp = ws / ".venv" / "Lib" / "site-packages"
+    create_dist_info(sp, "corp-utils", "1.0.0", license_str="Proprietary", top_level=["corp_utils"])
+    create_dist_info(sp, "legacy-lib", "0.1.0", license_str="GPL-3.0-only", top_level=["legacy_lib"])
+
+    runner = CliRunner(env={"COLUMNS": "160"})
+
+    # 1. Without flags -> fails on GPL-3.0 deny policy
+    res_fail = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--offline",
+            "--deny-license",
+            "GPL-3.0-only",
+        ],
+    )
+    assert res_fail.exit_code != int(ExitCode.OK)
+
+    # 2. With --internal-package "corp-*" and --ignore-package "legacy-lib" -> passes OK (0)
+    res_pass = runner.invoke(
+        cli,
+        [
+            "--project",
+            str(ws),
+            "--offline",
+            "--internal-package",
+            "corp-*",
+            "--ignore-package",
+            "legacy-lib",
+            "--deny-license",
+            "GPL-3.0-only",
+        ],
+    )
+    assert res_pass.exit_code == int(ExitCode.OK), res_pass.output
+    assert "internal package" in res_pass.output

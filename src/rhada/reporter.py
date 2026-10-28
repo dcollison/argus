@@ -108,6 +108,9 @@ def render_console_report(
         prov_str = ""
         if comp.origin_package:
             prov_str = f"vendored ({comp.origin_package})"
+        elif comp.is_internal:
+            prov_str = "internal package"
+            risk_style = "cyan"
         elif comp.provenance:
             prov_str = comp.provenance
         elif comp.component_type.value == "python-package":

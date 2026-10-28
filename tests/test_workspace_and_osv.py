@@ -8,7 +8,11 @@ import httpx
 
 from rhada.models import Component, ComponentScope, ComponentType, Severity
 from rhada.osv import OsvClient, compute_cvss_v3_score, parse_osv_vulnerability
-from rhada.workspace import inspect_workspace
+from rhada.workspace import (
+    inspect_workspace,
+    load_tool_rhada_config,
+    matches_package_pattern,
+)
 from tests.helpers import create_dist_info
 
 
@@ -92,7 +96,9 @@ source = { registry = "https://pypi.org/simple" }
         "2.0.7",
         license_expression="MIT",
         top_level=["urllib3"],
-        license_files={"LICENSE.txt": "Copyright (c) 2008-2023 Andrey Petrov\nPermission is hereby granted, free of charge, to any person obtaining a copy"},
+        license_files={
+            "LICENSE.txt": "Copyright (c) 2008-2023 Andrey Petrov\nPermission is hereby granted, free of charge, to any person obtaining a copy"
+        },
     )
     create_dist_info(
         site_packages,
@@ -372,4 +378,114 @@ test =
     assert "pytest" in ws.direct_dev_deps
 
 
+def test_matches_package_pattern() -> None:
+    patterns = ["mycorp-*", "internal_sdk", "*_private"]
+    # Exact and normalized matches
+    assert matches_package_pattern("mycorp-auth", patterns) is True
+    assert matches_package_pattern("mycorp_billing", patterns) is True
+    assert matches_package_pattern("MYCORP-CORE", patterns) is True
+    assert matches_package_pattern("internal-sdk", patterns) is True
+    assert matches_package_pattern("internal_sdk", patterns) is True
+    assert matches_package_pattern("auth_private", patterns) is True
+    assert matches_package_pattern("auth-private", patterns) is True
 
+    # Negative matches
+    assert matches_package_pattern("requests", patterns) is False
+    assert matches_package_pattern("mycorp", patterns) is False
+    assert matches_package_pattern("other-sdk", patterns) is False
+    assert matches_package_pattern("", patterns) is False
+
+
+def test_load_tool_rhada_config(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "my-service"
+version = "1.0.0"
+
+[tool.rhada]
+internal-packages = ["mycorp-*", "internal-pkg"]
+ignore-packages = ["legacy-stub"]
+allowed-licenses = ["MIT", "Apache-2.0", "0BSD"]
+denied-licenses = ["GPL-3.0-only"]
+allow-unknown-license = true
+fail-on-severity = "critical"
+fail-on-license = "high"
+fail-on-linkage = true
+offline = true
+verbose = true
+include-dev = false
+osv-timeout = 25.0
+""",
+        encoding="utf-8",
+    )
+
+    cfg = load_tool_rhada_config(tmp_path)
+    assert cfg["internal_packages"] == {"mycorp-*", "internal-pkg"}
+    assert cfg["ignore_packages"] == {"legacy-stub"}
+    assert cfg["allowed_licenses"] == {"MIT", "Apache-2.0", "0BSD"}
+    assert cfg["denied_licenses"] == {"GPL-3.0-only"}
+    assert cfg["allow_unknown_license"] is True
+    assert cfg["fail_on_severity"] == Severity.CRITICAL
+    assert cfg["fail_on_license"] == Severity.HIGH
+    assert cfg["fail_on_linkage"] is True
+    assert cfg["offline"] is True
+    assert cfg["verbose"] is True
+    assert cfg["include_dev"] is False
+    assert cfg["osv_timeout"] == 25.0
+
+
+def test_internal_packages_and_ignore_packages_audit_behavior(tmp_path: Path) -> None:
+    from rhada.auditor import run_audit
+    from rhada.compliance import generate_third_party_notices
+    from rhada.models import AuditConfig
+
+    ws = tmp_path / "app"
+    ws.mkdir()
+    (ws / "pyproject.toml").write_text(
+        """
+[project]
+name = "enterprise-app"
+version = "1.0.0"
+dependencies = [
+    "clean-pkg>=1.0.0",
+    "corp-auth>=2.0.0",
+    "legacy-tool>=0.5.0",
+]
+
+[tool.rhada]
+internal-packages = ["corp-*"]
+ignore-packages = ["legacy-tool"]
+allowed-licenses = ["MIT"]
+""",
+        encoding="utf-8",
+    )
+
+    sp = ws / ".venv" / "Lib" / "site-packages"
+    create_dist_info(sp, "clean-pkg", "1.0.0", license_str="MIT", top_level=["clean_pkg"])
+    create_dist_info(sp, "corp-auth", "2.0.0", license_str="Proprietary", top_level=["corp_auth"])
+    create_dist_info(sp, "legacy-tool", "0.5.0", license_str="GPL-3.0-only", top_level=["legacy_tool"])
+
+    config = AuditConfig(project_path=ws, offline=True)
+    report = run_audit(config)
+
+    # 1. legacy-tool must be excluded
+    active_names = {c.name for c in report.components}
+    assert "clean-pkg" in active_names
+    assert "corp-auth" in active_names
+    assert "legacy-tool" not in active_names
+
+    # 2. corp-auth must be tagged internal
+    corp_comp = next(c for c in report.components if c.name == "corp-auth")
+    assert corp_comp.is_internal is True
+
+    # 3. Compliance evaluation must have zero findings
+    assert len(report.compliance_findings) == 0
+    assert report.exit_code == 0
+
+    # 4. THIRD_PARTY_NOTICES must include clean-pkg, but NOT corp-auth or legacy-tool
+    notices_txt = generate_third_party_notices(report)
+    assert "clean-pkg" in notices_txt
+    assert "corp-auth" not in notices_txt
+    assert "legacy-tool" not in notices_txt

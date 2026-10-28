@@ -15,27 +15,28 @@ from rhada.models import (
     Severity,
 )
 from rhada.spdx import evaluate_spdx_allowlist, evaluate_spdx_denylist, normalize_single_license
+from rhada.workspace import matches_package_pattern
 
 # Canonical fallback licence summaries when a wheel omits a verbatim LICENSE file
 CANONICAL_LICENSE_FALLBACKS: dict[str, str] = {
     "MIT": (
         "MIT License\n\n"
         "Permission is hereby granted, free of charge, to any person obtaining a copy of this software and "
-        "associated documentation files (the \"Software\"), to deal in the Software without restriction, "
+        'associated documentation files (the "Software"), to deal in the Software without restriction, '
         "including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, "
         "and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, "
         "subject to the following conditions:\n\n"
         "The above copyright notice and this permission notice shall be included in all copies or substantial "
         "portions of the Software.\n\n"
-        "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED."
+        'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.'
     ),
     "Apache-2.0": (
         "Apache License, Version 2.0\n\n"
-        "Licensed under the Apache License, Version 2.0 (the \"License\"); you may not use this component "
+        'Licensed under the Apache License, Version 2.0 (the "License"); you may not use this component '
         "except in compliance with the License. You may obtain a copy of the License at:\n"
         "    http://www.apache.org/licenses/LICENSE-2.0\n\n"
         "Unless required by applicable law or agreed to in writing, software distributed under the License "
-        "is distributed on an \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied."
+        'is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.'
     ),
     "BSD-3-Clause": (
         "BSD 3-Clause License\n\n"
@@ -104,7 +105,11 @@ def evaluate_compliance(
             allowed_upper.add(norm.upper())
 
     for comp in components:
-        if not comp.is_bundled:
+        if not comp.is_bundled or comp.is_internal:
+            continue
+        if config.internal_packages and matches_package_pattern(comp.name, config.internal_packages):
+            continue
+        if config.ignore_packages and matches_package_pattern(comp.name, config.ignore_packages):
             continue
 
         lic = comp.license_info
@@ -222,10 +227,14 @@ def evaluate_compliance(
         # 4. Weak Copyleft (LGPL / MPL / EPL / CDDL)
         elif lic.risk_category == LicenseRiskCategory.WEAK_COPYLEFT:
             is_lgpl = "LGPL" in spdx_id.upper() or any("LGPL" in c.upper() for c in choices)
-            effective_src = comp.source_url or comp.homepage or (
-                f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
-                if comp.version and comp.version != "unknown"
-                else f"https://pypi.org/project/{comp.name}/"
+            effective_src = (
+                comp.source_url
+                or comp.homepage
+                or (
+                    f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
+                    if comp.version and comp.version != "unknown"
+                    else f"https://pypi.org/project/{comp.name}/"
+                )
             )
             is_opaque_bundle = (
                 layout == DistributionLayout.MONOLITHIC_BINARY
@@ -376,10 +385,7 @@ def evaluate_compliance(
         # 8a. GPL-2.0-only incompatibility with Apache-2.0
         # Under FSF analysis, Apache-2.0 patent termination (Sec. 3) and indemnity (Sec. 9) clauses
         # are "further restrictions" prohibited by GPL-2.0 Section 6.
-        has_gpl2 = any(
-            c.license_info.spdx_id in ("GPL-2.0-only", "GPL-2.0")
-            for c in active_bundled
-        )
+        has_gpl2 = any(c.license_info.spdx_id in ("GPL-2.0-only", "GPL-2.0") for c in active_bundled)
         if has_gpl2:
             findings.extend(
                 ComplianceFinding(
@@ -409,8 +415,7 @@ def evaluate_compliance(
 
         # 8b. Strong Copyleft combined with Proprietary components
         has_strong_copyleft = any(
-            c.license_info.risk_category == LicenseRiskCategory.STRONG_COPYLEFT
-            for c in active_bundled
+            c.license_info.risk_category == LicenseRiskCategory.STRONG_COPYLEFT for c in active_bundled
         )
         if has_strong_copyleft:
             findings.extend(
@@ -436,15 +441,15 @@ def evaluate_compliance(
                 if pc.license_info.risk_category == LicenseRiskCategory.PROPRIETARY
             )
 
-    return findings
-
-
+    return findings
+
+
 def generate_third_party_notices(report: AuditReport) -> str:
     """
     Generate a THIRD_PARTY_NOTICES attribution file suitable for
     distribution alongside Python or compiled software.
     """
-    bundled = [c for c in report.components if c.is_bundled]
+    bundled = [c for c in report.components if c.is_bundled and not c.is_internal]
     bundled_sorted = sorted(bundled, key=lambda c: (c.name.lower(), c.version))
 
     lines: list[str] = [
@@ -503,10 +508,14 @@ def generate_third_party_notices(report: AuditReport) -> str:
             )
         is_lgpl = "LGPL" in lic.spdx_id.upper() or any("LGPL" in c.upper() for c in (lic.license_choices or []))
         if is_lgpl:
-            src_link = comp.source_url or comp.homepage or (
-                f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
-                if comp.version and comp.version != "unknown"
-                else f"https://pypi.org/project/{comp.name}/"
+            src_link = (
+                comp.source_url
+                or comp.homepage
+                or (
+                    f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
+                    if comp.version and comp.version != "unknown"
+                    else f"https://pypi.org/project/{comp.name}/"
+                )
             )
             lines.extend(
                 [
@@ -551,7 +560,9 @@ def generate_third_party_notices(report: AuditReport) -> str:
                 lines.append("")
         else:
             primary_choice = lic.license_choices[0] if lic.license_choices else lic.spdx_id
-            fallback_text = CANONICAL_LICENSE_FALLBACKS.get(primary_choice) or CANONICAL_LICENSE_FALLBACKS.get(lic.spdx_id)
+            fallback_text = CANONICAL_LICENSE_FALLBACKS.get(primary_choice) or CANONICAL_LICENSE_FALLBACKS.get(
+                lic.spdx_id
+            )
             if fallback_text:
                 lines.append(f"--- Standard {primary_choice} License Notice ---")
                 lines.append(fallback_text)

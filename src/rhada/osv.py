@@ -277,7 +277,7 @@ class OsvClient:
         vuln_cache: dict[str, dict[str, Any]] = {}
 
         for comp in components:
-            if not comp.is_bundled or comp.component_type != ComponentType.PYTHON_PACKAGE:
+            if not comp.is_bundled or comp.is_internal or comp.component_type != ComponentType.PYTHON_PACKAGE:
                 continue
             dep = _build_resolved_dependency(comp)
             if dep is None:
@@ -343,7 +343,7 @@ class OsvClient:
         queryable: list[tuple[Component, dict[str, Any]]] = []
 
         for comp in components:
-            if not comp.is_bundled:
+            if not comp.is_bundled or comp.is_internal:
                 continue
             if not comp.version or comp.version == "unknown":
                 continue
