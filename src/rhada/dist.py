@@ -1399,39 +1399,75 @@ def build_distribution_file_inventory(
             if first_seg.endswith(".libs"):
                 pkg_lead = first_seg[:-5]
                 matched_c = comp_by_norm.get(normalize_pkg_name(pkg_lead)) or comp_by_name.get(pkg_lead)
-                category = DistributionFileCategory.PYTHON_PACKAGE
+                is_int = matched_c and matched_c.is_internal
+                category = (
+                    DistributionFileCategory.APPLICATION_BINARY if is_int else DistributionFileCategory.PYTHON_PACKAGE
+                )
                 comp_name = matched_c.name if matched_c else pkg_lead
                 comp_ver = matched_c.version if matched_c else None
-                desc = f"Wheel native dependency library folder ({first_seg})"
+                desc = (
+                    f"Internal native dependency library folder ({first_seg})"
+                    if is_int
+                    else f"Wheel native dependency library folder ({first_seg})"
+                )
             elif first_seg in comp_by_mod:
                 c = comp_by_mod[first_seg]
-                category = DistributionFileCategory.PYTHON_PACKAGE
+                category = (
+                    DistributionFileCategory.APPLICATION_BINARY
+                    if c.is_internal
+                    else DistributionFileCategory.PYTHON_PACKAGE
+                )
                 comp_name = c.name
                 comp_ver = c.version
-                desc = f"Bundled package file ({c.name})"
+                desc = (
+                    f"Internal application package file ({c.name})"
+                    if c.is_internal
+                    else f"Bundled package file ({c.name})"
+                )
             elif normalize_pkg_name(first_seg) in comp_by_norm:
                 c = comp_by_norm[normalize_pkg_name(first_seg)]
-                category = DistributionFileCategory.PYTHON_PACKAGE
+                category = (
+                    DistributionFileCategory.APPLICATION_BINARY
+                    if c.is_internal
+                    else DistributionFileCategory.PYTHON_PACKAGE
+                )
                 comp_name = c.name
                 comp_ver = c.version
-                desc = f"Bundled package file ({c.name})"
+                desc = (
+                    f"Internal application package file ({c.name})"
+                    if c.is_internal
+                    else f"Bundled package file ({c.name})"
+                )
             elif first_seg in comp_by_name:
                 c = comp_by_name[first_seg]
-                category = DistributionFileCategory.PYTHON_PACKAGE
+                category = (
+                    DistributionFileCategory.APPLICATION_BINARY
+                    if c.is_internal
+                    else DistributionFileCategory.PYTHON_PACKAGE
+                )
                 comp_name = c.name
                 comp_ver = c.version
-                desc = f"Bundled package file ({c.name})"
+                desc = (
+                    f"Internal application package file ({c.name})"
+                    if c.is_internal
+                    else f"Bundled package file ({c.name})"
+                )
             else:
                 for c in components:
                     if rel_path in c.bundled_files or fname in c.bundled_files:
-                        category = (
-                            DistributionFileCategory.PYTHON_PACKAGE
-                            if c.component_type == ComponentType.PYTHON_PACKAGE
-                            else DistributionFileCategory.NATIVE_LIBRARY
-                        )
+                        if c.is_internal:
+                            category = DistributionFileCategory.APPLICATION_BINARY
+                        elif c.component_type == ComponentType.PYTHON_PACKAGE:
+                            category = DistributionFileCategory.PYTHON_PACKAGE
+                        else:
+                            category = DistributionFileCategory.NATIVE_LIBRARY
                         comp_name = c.name
                         comp_ver = c.version
-                        desc = f"Bundled component file ({c.name})"
+                        desc = (
+                            f"Internal application package file ({c.name})"
+                            if c.is_internal
+                            else f"Bundled component file ({c.name})"
+                        )
                         break
 
         # 7. First-Party Application Modules / Resources
@@ -1440,11 +1476,37 @@ def build_distribution_file_inventory(
             or first_seg in project_mods
             or any(rel_path.startswith(f"{pm}/") for pm in project_mods)
             or (ws and ws.module_to_package.get(first_seg) in project_pkgs)
+            or any(
+                c.is_internal
+                and (
+                    first_seg == c.name
+                    or first_seg in c.top_level_modules
+                    or normalize_pkg_name(first_seg) == normalize_pkg_name(c.name)
+                )
+                for c in components
+            )
         ):
             category = DistributionFileCategory.APPLICATION_BINARY
-            comp_name = target_name
-            comp_ver = target_version
-            desc = f"Application module/resource file ({first_seg})"
+            matched_internal = next(
+                (
+                    c
+                    for c in components
+                    if c.is_internal
+                    and (
+                        first_seg == c.name
+                        or first_seg in c.top_level_modules
+                        or normalize_pkg_name(first_seg) == normalize_pkg_name(c.name)
+                    )
+                ),
+                None,
+            )
+            comp_name = matched_internal.name if matched_internal else target_name
+            comp_ver = matched_internal.version if matched_internal else target_version
+            desc = (
+                f"Internal application package file ({comp_name})"
+                if matched_internal
+                else f"Application module/resource file ({first_seg})"
+            )
 
         # 8. Unaccounted fallback
         if category == DistributionFileCategory.UNACCOUNTED:

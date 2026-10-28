@@ -67,18 +67,71 @@ uv run rhada --project . --dist ./dist/app-linux-x86_64 \
   --notices dist/THIRD_PARTY_NOTICES
 ```
 
-### 3. Policy Controls and Approved Licences
+### 3. Policy Controls, Internal Packages, and `pyproject.toml` Configuration
 
-If your organisation maintains proprietary in-house packages or approved commercial licences, you can permit them using `--allow-licence` (or `--allow-licences` / `--allow-license`):
+Rhada supports turnkey policy configuration via CLI options or centrally via `[tool.rhada]` in your `pyproject.toml`:
 
+#### Internal Package Whitelisting (`--internal-package` / `--allow-package`)
+For projects utilizing in-house or corporate packages (e.g. from private registries or monorepos):
+- Matching packages are treated as **first-party organization code**.
+- Exempt from third-party license compliance checks (`LIC-UNKNOWN`, `LIC-PROPRIETARY`, `LIC-POLICY-NOT-ALLOWED`).
+- Bypassed from public OSV.dev vulnerability queries (preventing private package name leakage).
+- Omitted from `THIRD_PARTY_NOTICES` (which are reserved for third-party OSS).
+- Classified as first-party application code in distribution file accounting.
+
+```bash
+# Whitelist by pattern or comma-separated names
+uv run rhada --project . --internal-package "mycorp-*,internal-auth"
+```
+
+#### Ignoring Dependencies (`--ignore-package`)
+To completely omit specific packages from audit findings:
+```bash
+uv run rhada --project . --ignore-package "legacy-test-tool,mock-*"
+```
+
+#### Approved Licences (`--allow-licence` / `--allow-license`)
 ```bash
 # Approve standard open-source licences alongside internal company or proprietary licences
 uv run rhada --project . \
-  --allow-licence "MIT,Apache-2.0,BSD-3-Clause,LicenseRef-AcmeCorp,Proprietary"
+  --allow-licence "MIT,Apache-2.0,BSD-3-Clause,0BSD,LicenseRef-AcmeCorp,Proprietary"
 ```
 
-- Any component declaring an approved licence will **not** trigger `LIC-POLICY-NOT-ALLOWED`, `LIC-PROPRIETARY`, or `LIC-UNKNOWN`.
-- Custom SPDX identifiers using the `LicenseRef-[A-Za-z0-9.-]+` convention are supported throughout all audit checks, SBOMs, and notice generators.
+#### Declarative Configuration in `pyproject.toml`
+All policy rules and operational defaults can be declared in `[tool.rhada]`:
+
+```toml
+[tool.rhada]
+# Whitelist internal corporate packages (supports exact names and wildcards)
+internal-packages = [
+    "mycorp-*",
+    "internal-security-sdk",
+]
+
+# Completely ignore specific dependencies
+ignore-packages = [
+    "legacy-stub",
+]
+
+# Approved licenses for your organisation
+allowed-licenses = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "0BSD",
+    "Proprietary",
+    "LicenseRef-Corporate",
+]
+
+# Optional audit enforcement defaults
+fail-on-severity = "high"
+fail-on-license = "high"
+allow-unknown-license = false
+verbose = false
+offline = false
+```
+
+CLI flags supplement and take precedence over `pyproject.toml` settings.
 
 ### 4. LGPL Source Code Links and Compliance Offers
 

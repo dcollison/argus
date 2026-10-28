@@ -239,6 +239,24 @@ def audit_cmd(
             help="Forbidden SPDX licence IDs (repeatable or comma-separated).",
         ),
     ] = None,
+    internal_packages: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--internal-package",
+            "--internal-packages",
+            "--allow-package",
+            "--allow-packages",
+            help="Internal package names or wildcards (e.g. 'mycorp-*') to treat as application code.",
+        ),
+    ] = None,
+    ignore_packages: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ignore-package",
+            "--ignore-packages",
+            help="Packages or wildcards to completely ignore from compliance audit and vulnerability checks.",
+        ),
+    ] = None,
     verbose: Annotated[
         bool,
         typer.Option(
@@ -270,6 +288,8 @@ def audit_cmd(
         allow_unknown_license=allow_unknown_license,
         allowed_licenses=_split_csv_values(allowed_licenses),
         denied_licenses=_split_csv_values(denied_licenses),
+        internal_packages=_split_csv_values(internal_packages),
+        ignore_packages=_split_csv_values(ignore_packages),
         sbom_output=sbom_output,
         sbom_format=sbom_format.value,
         notices_output=notices_output,

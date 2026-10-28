@@ -15,13 +15,15 @@ from rhada.models import (
     AuditMode,
     AuditReport,
     BundlerType,
+    ComponentScope,
     DistributionLayout,
     ExitCode,
+    Severity,
 )
 from rhada.osv import OsvClient
 from rhada.reporter import write_json_report
 from rhada.sbom import write_sbom
-from rhada.workspace import inspect_workspace
+from rhada.workspace import inspect_workspace, load_tool_rhada_config, matches_package_pattern
 
 
 def compute_exit_code(report: AuditReport, config: AuditConfig) -> ExitCode:
@@ -61,12 +63,59 @@ def run_audit(
       both Python and native components.
     """
     project_path = config.project_path.resolve()
+
+    # Merge pyproject.toml [tool.rhada] configuration directives
+    tool_cfg = load_tool_rhada_config(project_path)
+    if tool_cfg:
+        if "internal_packages" in tool_cfg:
+            config.internal_packages = set(config.internal_packages) | tool_cfg["internal_packages"]
+        if "ignore_packages" in tool_cfg:
+            config.ignore_packages = set(config.ignore_packages) | tool_cfg["ignore_packages"]
+        if "allowed_licenses" in tool_cfg:
+            config.allowed_licenses = set(config.allowed_licenses) | tool_cfg["allowed_licenses"]
+        if "denied_licenses" in tool_cfg:
+            config.denied_licenses = set(config.denied_licenses) | tool_cfg["denied_licenses"]
+        if "allow_unknown_license" in tool_cfg and not config.allow_unknown_license:
+            config.allow_unknown_license = tool_cfg["allow_unknown_license"]
+        if "fail_on_linkage" in tool_cfg and not config.fail_on_linkage:
+            config.fail_on_linkage = tool_cfg["fail_on_linkage"]
+        if "offline" in tool_cfg and not config.offline:
+            config.offline = tool_cfg["offline"]
+        if "verbose" in tool_cfg and not config.verbose:
+            config.verbose = tool_cfg["verbose"]
+        if "include_dev" in tool_cfg and not config.include_dev:
+            config.include_dev = tool_cfg["include_dev"]
+        if "fail_on_severity" in tool_cfg and config.fail_on_severity == Severity.HIGH:
+            config.fail_on_severity = tool_cfg["fail_on_severity"]
+        if "fail_on_license" in tool_cfg and config.fail_on_license == Severity.HIGH:
+            config.fail_on_license = tool_cfg["fail_on_license"]
+        if "osv_timeout" in tool_cfg and config.osv_timeout == 15.0:
+            config.osv_timeout = tool_cfg["osv_timeout"]
+
     ws = inspect_workspace(project_path, include_dev=config.include_dev)
 
     if config.dist_path is None:
         # Source-Only Mode
         active = [c for c in ws.components.values() if c.is_bundled]
         excluded = [c for c in ws.components.values() if not c.is_bundled]
+
+        # Apply ignore-packages filter and internal-packages tagging
+        if config.ignore_packages:
+            active_filtered = []
+            for c in active:
+                if matches_package_pattern(c.name, config.ignore_packages):
+                    c.is_bundled = False
+                    c.scope = ComponentScope.DEV_EXCLUDED
+                    excluded.append(c)
+                else:
+                    active_filtered.append(c)
+            active = active_filtered
+
+        if config.internal_packages:
+            for c in active:
+                if matches_package_pattern(c.name, config.internal_packages):
+                    c.is_internal = True
+
         linkage_rep = None
         if ws.elf_binaries:
             from rhada.elf import verify_binary_linkage
@@ -96,6 +145,23 @@ def run_audit(
             dist_res,
             include_dev=config.include_dev,
         )
+
+        # Apply ignore-packages filter and internal-packages tagging
+        if config.ignore_packages:
+            active_filtered = []
+            for c in active:
+                if matches_package_pattern(c.name, config.ignore_packages):
+                    c.is_bundled = False
+                    c.scope = ComponentScope.DEV_EXCLUDED
+                    excluded.append(c)
+                else:
+                    active_filtered.append(c)
+            active = active_filtered
+
+        if config.internal_packages:
+            for c in active:
+                if matches_package_pattern(c.name, config.internal_packages):
+                    c.is_internal = True
         target_name = ws.project_name if ws.project_name != "unknown-project" else dist_path.stem
         report = AuditReport(
             target_name=target_name,

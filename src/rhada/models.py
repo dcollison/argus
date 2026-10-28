@@ -248,6 +248,7 @@ class Component:
     top_level_modules: list[str] = field(default_factory=list)
     bundled_files: list[str] = field(default_factory=list)
     is_bundled: bool = True
+    is_internal: bool = False
     is_statically_compiled: bool = False
     has_dynamic_relinking: bool = True
     discovery_evidence: list[str] = field(default_factory=list)
@@ -285,6 +286,7 @@ class Component:
             "top_level_modules": list(self.top_level_modules),
             "bundled_files": list(self.bundled_files),
             "is_bundled": self.is_bundled,
+            "is_internal": self.is_internal,
             "is_statically_compiled": self.is_statically_compiled,
             "has_dynamic_relinking": self.has_dynamic_relinking,
             "discovery_evidence": list(self.discovery_evidence),
@@ -504,6 +506,8 @@ class AuditConfig:
     allow_unknown_license: bool = False
     allowed_licenses: set[str] = field(default_factory=set)
     denied_licenses: set[str] = field(default_factory=set)
+    internal_packages: set[str] = field(default_factory=set)
+    ignore_packages: set[str] = field(default_factory=set)
     sbom_output: Path | None = None
     sbom_format: str = "cyclonedx"
     notices_output: Path | None = None

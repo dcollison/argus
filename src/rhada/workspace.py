@@ -6,11 +6,13 @@ import ast
 import configparser
 import contextlib
 import email
+import fnmatch
 import os
 import re
 import shlex
 import sys
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,8 +20,45 @@ from typing import Any
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import canonicalize_name
 
-from rhada.models import Component, ComponentScope, ComponentType, ElfBinaryInfo, LicenseInfo
+from rhada.models import (
+    Component,
+    ComponentScope,
+    ComponentType,
+    ElfBinaryInfo,
+    LicenseInfo,
+    Severity,
+)
 from rhada.spdx import build_license_info
+
+
+def matches_package_pattern(pkg_name: str, patterns: Iterable[str]) -> bool:
+    """
+    Check if a package name matches any pattern in patterns (case-insensitive).
+    Supports exact names, wildcards (*, ?), and PEP 503 normalisation
+    (e.g. 'mycorp-*' matches 'mycorp-auth' and 'mycorp_core').
+    """
+    if not pkg_name:
+        return False
+    pkg_clean = pkg_name.strip().lower()
+    pkg_norm = normalize_pkg_name(pkg_name)
+    pkg_under = pkg_clean.replace("-", "_")
+
+    for pat in patterns:
+        pat_clean = pat.strip().lower()
+        if not pat_clean:
+            continue
+        pat_norm = normalize_pkg_name(pat_clean)
+        pat_under = pat_clean.replace("-", "_")
+
+        if (
+            fnmatch.fnmatch(pkg_clean, pat_clean)
+            or fnmatch.fnmatch(pkg_norm, pat_norm)
+            or fnmatch.fnmatch(pkg_under, pat_under)
+            or pkg_clean == pat_clean
+            or pkg_norm == pat_norm
+        ):
+            return True
+    return False
 
 
 def normalize_pkg_name(name: str) -> str:
@@ -1178,6 +1217,126 @@ def _parse_pyproject_toml(pyproject_path: Path) -> dict[str, Any]:
         return tomllib.loads(_read_text_safe(pyproject_path))
     except (tomllib.TOMLDecodeError, OSError):
         return {}
+
+
+def load_tool_rhada_config(project_path: Path) -> dict[str, Any]:
+    """
+    Load and normalise configuration directives from [tool.rhada] in pyproject.toml.
+    Supports internal-packages, ignore-packages, allowed-licenses, denied-licenses,
+    allow-unknown-license, severity thresholds, and operational flags.
+    """
+    pyproject_file = project_path / "pyproject.toml" if project_path.is_dir() else project_path
+    if not pyproject_file.is_file():
+        return {}
+    data = _parse_pyproject_toml(pyproject_file)
+    tool_section = data.get("tool", {})
+    if not isinstance(tool_section, dict):
+        return {}
+    rhada_cfg = tool_section.get("rhada", {})
+    if not isinstance(rhada_cfg, dict):
+        return {}
+
+    parsed: dict[str, Any] = {}
+
+    def _as_set(val: Any) -> set[str]:
+        if isinstance(val, str):
+            return {item.strip() for item in val.split(",") if item.strip()}
+        if isinstance(val, (list, tuple, set)):
+            return {str(item).strip() for item in val if str(item).strip()}
+        return set()
+
+    # internal_packages
+    raw_internal = (
+        rhada_cfg.get("internal-packages")
+        or rhada_cfg.get("internal_packages")
+        or rhada_cfg.get("allow-packages")
+        or rhada_cfg.get("allow_packages")
+    )
+    if raw_internal is not None:
+        parsed["internal_packages"] = _as_set(raw_internal)
+
+    # ignore_packages
+    raw_ignore = rhada_cfg.get("ignore-packages") or rhada_cfg.get("ignore_packages")
+    if raw_ignore is not None:
+        parsed["ignore_packages"] = _as_set(raw_ignore)
+
+    # allowed_licenses
+    raw_allowed = (
+        rhada_cfg.get("allowed-licenses")
+        or rhada_cfg.get("allowed_licenses")
+        or rhada_cfg.get("allow-licenses")
+        or rhada_cfg.get("allow_licenses")
+        or rhada_cfg.get("allow-licences")
+        or rhada_cfg.get("allowed-licences")
+    )
+    if raw_allowed is not None:
+        parsed["allowed_licenses"] = _as_set(raw_allowed)
+
+    # denied_licenses
+    raw_denied = (
+        rhada_cfg.get("denied-licenses")
+        or rhada_cfg.get("denied_licenses")
+        or rhada_cfg.get("deny-licenses")
+        or rhada_cfg.get("deny_licenses")
+        or rhada_cfg.get("deny-licences")
+        or rhada_cfg.get("denied-licences")
+    )
+    if raw_denied is not None:
+        parsed["denied_licenses"] = _as_set(raw_denied)
+
+    # allow_unknown_license
+    raw_unk = (
+        rhada_cfg.get("allow-unknown-license")
+        if "allow-unknown-license" in rhada_cfg
+        else rhada_cfg.get("allow_unknown_license")
+    )
+    if raw_unk is not None:
+        parsed["allow_unknown_license"] = bool(raw_unk)
+
+    # fail_on_severity
+    raw_sev = rhada_cfg.get("fail-on-severity") or rhada_cfg.get("fail_on_severity")
+    if raw_sev:
+        with contextlib.suppress(ValueError):
+            parsed["fail_on_severity"] = Severity(str(raw_sev).lower())
+
+    # fail_on_license
+    raw_lic_sev = (
+        rhada_cfg.get("fail-on-license")
+        or rhada_cfg.get("fail_on_license")
+        or rhada_cfg.get("fail-on-licence")
+        or rhada_cfg.get("fail_on_licence")
+    )
+    if raw_lic_sev:
+        with contextlib.suppress(ValueError):
+            parsed["fail_on_license"] = Severity(str(raw_lic_sev).lower())
+
+    # fail_on_linkage
+    raw_link = rhada_cfg.get("fail-on-linkage") if "fail-on-linkage" in rhada_cfg else rhada_cfg.get("fail_on_linkage")
+    if raw_link is not None:
+        parsed["fail_on_linkage"] = bool(raw_link)
+
+    # offline
+    raw_off = rhada_cfg.get("offline")
+    if raw_off is not None:
+        parsed["offline"] = bool(raw_off)
+
+    # verbose
+    raw_verb = rhada_cfg.get("verbose")
+    if raw_verb is not None:
+        parsed["verbose"] = bool(raw_verb)
+
+    # include_dev
+    raw_dev = rhada_cfg.get("include-dev") if "include-dev" in rhada_cfg else rhada_cfg.get("include_dev")
+    if raw_dev is not None:
+        parsed["include_dev"] = bool(raw_dev)
+
+    # osv_timeout
+    raw_timeout = rhada_cfg.get("osv-timeout") or rhada_cfg.get("osv_timeout")
+    if raw_timeout is not None:
+        with contextlib.suppress(ValueError, TypeError):
+            parsed["osv_timeout"] = float(raw_timeout)
+
+    return parsed
 
 
 def _parse_uv_lock(uv_lock_path: Path) -> dict[str, Any]:
