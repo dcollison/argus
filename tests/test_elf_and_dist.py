@@ -482,3 +482,43 @@ def test_unidentified_version_explicit_unknown() -> None:
     assert "unknown" in cli_out
     assert "@0.0.0" not in cli_out
 
+def test_nuitka_linux_site_packages_and_report_discovery(tmp_path: Path) -> None:
+    """Verify Linux absolute paths in site-packages are not misidentified as project modules,
+    and report.xml is auto-discovered in dist_path.parent."""
+    from rhada.dist import DistInspectionResult, inspect_compiled_distribution, parse_nuitka_compilation_report
+
+    xml_content = """<?xml version='1.0' encoding='utf8'?>
+<nuitka-compilation-report mode="standalone">
+  <module name="fusion_engine" kind="CompiledPythonPackage" usage="import" source_path="${cwd}/fusion_engine/__init__.py" />
+  <module name="opendis" kind="CompiledPythonPackage" usage="import" distribution="opendis" source_path="/opt/venv/lib/python3.11/site-packages/opendis/__init__.py" />
+  <module name="typing_extensions" kind="CompiledPythonModule" usage="import" distribution="typing_extensions" source_path="/home/runner/work/.venv/lib/python3.11/site-packages/typing_extensions.py" />
+  <distributions>
+    <distribution name="opendis" version="1.1.0" />
+    <distribution name="typing_extensions" version="4.16.0" />
+  </distributions>
+</nuitka-compilation-report>"""
+
+    # 1. Direct parsing check: opendis and typing_extensions must NOT be project_modules
+    report_file = tmp_path / "report.xml"
+    report_file.write_text(xml_content, encoding="utf-8")
+
+    res = DistInspectionResult()
+    parse_nuitka_compilation_report(report_file, res)
+    assert "opendis" not in res.project_modules
+    assert "typing_extensions" not in res.project_modules
+    assert "fusion_engine" in res.project_modules
+    assert "opendis" in res.bundled_modules
+    assert "typing_extensions" in res.bundled_modules
+    assert res.discovered_distributions["opendis"] == "1.1.0"
+    assert res.discovered_distributions["typing-extensions"] == "4.16.0"
+
+    # 2. Auto-discovery check: dist directory with adjacent report.xml
+    dist_dir = tmp_path / "entrypoint.dist"
+    dist_dir.mkdir()
+    (dist_dir / "entrypoint.exe").write_bytes(b"MZ\x90\x00" + b"\x00" * 100)
+
+    dist_res = inspect_compiled_distribution(dist_dir)
+    assert dist_res.bundler_type == BundlerType.NUITKA
+    assert "opendis" in dist_res.discovered_distributions
+    assert "typing-extensions" in dist_res.discovered_distributions
+

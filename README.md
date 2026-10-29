@@ -176,6 +176,68 @@ uv run rhada notices --project . --dist ./build/app.dist --output THIRD_PARTY_NO
 uv run rhada inspect-elf ./build/app.dist
 ```
 
+## CLI Reference
+
+Running `rhada [OPTIONS]` directly defaults to the `audit` command.
+
+### Global Options
+
+| Option | Short | Description |
+| :--- | :---: | :--- |
+| `--version` | | Show program version and exit. |
+| `--help` | `-h` | Show help message and exit. |
+
+### `audit` Command Options
+
+#### Workspace & Distribution Input Options
+
+| Option | Short | Type | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `--project` | `-p` | `PATH` | `.` | Path to the Python or `uv` project workspace root. |
+| `--dist` | `-d` | `PATH` | `None` | Path to a compiled Nuitka or PyInstaller distribution (directory or monolithic binary). |
+| `--compilation-report` | | `PATH` | *auto* | Optional path to a Nuitka `compilation-report.xml` or `report.xml`. If omitted, Rhada automatically searches `--dist`, its parent, and the current working directory. |
+| `--include-dev` | | *flag* | `false` | Include development and build dependencies in source audit mode. |
+| `--offline` | | *flag* | `false` | Skip online OSV.dev vulnerability queries. |
+
+#### Output & Reporting Options
+
+| Option | Short | Type | Default | Description |
+| :--- | :---: | :---: | :---: | :--- |
+| `--format` | | `table` \| `json` | `table` | Console output format rendered to standard output. |
+| `--report-json` | `-o`, `--output` | `PATH` | `None` | Write the complete machine-readable JSON audit report to disk. |
+| `--sbom` | | `PATH` | `None` | Write a machine-readable SBOM JSON file to the specified path. |
+| `--sbom-format` | | `cyclonedx` \| `spdx` | `cyclonedx` | SBOM standard specification format. |
+| `--notices` | | `PATH` | `None` | Write a `THIRD_PARTY_NOTICES` attribution file to the specified path. |
+| `--verbose` | `-v`, `--full` | *flag* | `false` | Show detailed distribution file accounting and component mapping breakdown. |
+
+#### Policy & Compliance Options
+
+| Option | Aliases | Type | Default | Description |
+| :--- | :--- | :---: | :---: | :--- |
+| `--fail-on-severity` | | `critical` \| `high` \| `medium` \| `low` | `high` | Minimum vulnerability severity threshold that triggers a non-zero exit code (`1` or `3`). |
+| `--fail-on-license` | `--fail-on-licence` | `critical` \| `high` \| `medium` \| `low` | `high` | Minimum licence compliance finding severity that triggers a non-zero exit code (`2` or `3`). |
+| `--fail-on-linkage` | | *flag* | `false` | Fail with exit code `4` if unresolved binary dynamic linkage dependencies (`DT_NEEDED`) or insecure RPATHs exist. |
+| `--allow-unknown-license` | `--allow-unknown-licence` | *flag* | `false` | Downgrade unknown or unasserted licence findings to `LOW` severity instead of `HIGH`. |
+| `--allow-license` | `--allow-licence`<br>`--allow-licenses`<br>`--allow-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Approved SPDX licence IDs or custom company licences. Packages with approved licences will not generate compliance findings. |
+| `--deny-license` | `--deny-licence`<br>`--deny-licenses`<br>`--deny-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Forbidden SPDX licence IDs. Packages using these licences will generate `HIGH` severity compliance findings. |
+| `--internal-package` | `--internal-packages`<br>`--allow-package`<br>`--allow-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Internal package names or wildcards (e.g. `'mycorp-*'`) to treat as first-party application code. |
+| `--ignore-package` | `--ignore-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Package names or wildcards to completely omit from compliance audit and vulnerability scanning. |
+
+### Subcommands Reference
+
+| Subcommand | Option | Short | Type | Default | Description |
+| :--- | :--- | :---: | :---: | :---: | :--- |
+| `audit` *(default)* | *(see above)* | | | | Full compliance, vulnerability, linkage, and SBOM audit. |
+| `sbom` | `--project` | `-p` | `PATH` | `.` | Project workspace root. |
+| | `--dist` | `-d` | `PATH` | `None` | Compiled distribution directory or binary. |
+| | `--format` | `-f` | `cyclonedx` \| `spdx` | `cyclonedx` | SBOM specification format. |
+| | `--output` | `-o` | `PATH` | *stdout* | Output file path (writes to stdout if omitted). |
+| | `--offline` | | *flag* | `false` | Skip OSV vulnerability enrichment. |
+| `notices` | `--project` | `-p` | `PATH` | `.` | Project workspace root. |
+| | `--dist` | `-d` | `PATH` | `None` | Compiled distribution directory or binary. |
+| | `--output` | `-o` | `PATH` | *stdout* | Output file path (writes to stdout if omitted). |
+| `inspect-elf` / `inspect-binary` | `TARGET` | | `PATH` *(arg)* | *(required)* | Target ELF/PE binary (`.so`, `.dll`, `.pyd`, `.exe`) or distribution directory to inspect for dependencies and dynamic linkage. |
+
 ## Exit Codes
 
 | Exit Code | Enum Name | Meaning |
