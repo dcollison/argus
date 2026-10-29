@@ -229,6 +229,20 @@ def audit_cmd(
             help="Approved SPDX licence IDs or internal company licences (repeatable or comma-separated).",
         ),
     ] = None,
+    extra_allowed_licenses: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--allow-extra-licence",
+            "--allow-extra-license",
+            "--allow-extra-licences",
+            "--allow-extra-licenses",
+            "--extra-allow-licence",
+            "--extra-allow-license",
+            "--extra-allowed-licence",
+            "--extra-allowed-license",
+            help="Additional approved licence IDs or custom company licences (repeatable or comma-separated) that supplement default rules without enforcing an exclusive allowlist.",
+        ),
+    ] = None,
     denied_licenses: Annotated[
         list[str] | None,
         typer.Option(
@@ -287,6 +301,7 @@ def audit_cmd(
         fail_on_linkage=fail_on_linkage,
         allow_unknown_license=allow_unknown_license,
         allowed_licenses=_split_csv_values(allowed_licenses),
+        extra_allowed_licenses=_split_csv_values(extra_allowed_licenses),
         denied_licenses=_split_csv_values(denied_licenses),
         internal_packages=_split_csv_values(internal_packages),
         ignore_packages=_split_csv_values(ignore_packages),

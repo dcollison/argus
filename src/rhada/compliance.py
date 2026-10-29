@@ -104,6 +104,20 @@ def evaluate_compliance(
         if norm != "NOASSERTION":
             allowed_upper.add(norm.upper())
 
+    extra_allowed_upper: set[str] = set()
+    for a in config.extra_allowed_licenses:
+        clean = a.strip()
+        if not clean:
+            continue
+        extra_allowed_upper.add(clean.upper())
+        norm = normalize_single_license(clean)
+        if norm != "NOASSERTION":
+            extra_allowed_upper.add(norm.upper())
+
+    # If an exclusive allowlist is active, extra allowed licences append to it
+    if allowed_upper and extra_allowed_upper:
+        allowed_upper.update(extra_allowed_upper)
+
     for comp in components:
         if not comp.is_bundled or comp.is_internal:
             continue
@@ -155,7 +169,23 @@ def evaluate_compliance(
                 and bool(allowed_upper & {"INTERNAL", "LICENSEREF-INTERNAL"})
             )
         )
-        is_explicitly_allowed = bool(allowed_upper) and is_permitted
+
+        # Check if licence is permitted by supplemental extra allowed licences
+        is_extra_allowed = bool(extra_allowed_upper) and (
+            evaluate_spdx_allowlist(spdx_id, extra_allowed_upper)
+            or (lic.is_dual_licensed and bool(choices_upper & extra_allowed_upper))
+            or (lic.declared_raw and lic.declared_raw.strip().upper() in extra_allowed_upper)
+            or (
+                lic.risk_category == LicenseRiskCategory.PROPRIETARY
+                and bool(extra_allowed_upper & {"PROPRIETARY", "LICENSEREF-PROPRIETARY"})
+            )
+            or (
+                (spdx_id.upper().endswith("-INTERNAL") or spdx_id.upper() == "LICENSEREF-INTERNAL")
+                and bool(extra_allowed_upper & {"INTERNAL", "LICENSEREF-INTERNAL"})
+            )
+        )
+
+        is_explicitly_allowed = (bool(allowed_upper) and is_permitted) or is_extra_allowed
 
         # 2. Explicit Allowed Licence Policy Check
         if allowed_upper and not is_permitted:
@@ -170,7 +200,7 @@ def evaluate_compliance(
                     title=f"Licence '{spdx_id}' not in policy allow-list",
                     description=(
                         f"Component '{comp.name}@{comp.version}' declares licence '{spdx_id}', "
-                        f"which is not among the approved licences ({', '.join(sorted(config.allowed_licenses))})."
+                        f"which is not among the approved licences ({', '.join(sorted(config.allowed_licenses | config.extra_allowed_licenses))})."
                     ),
                     remediation=f"Request legal exception for '{spdx_id}' or replace '{comp.name}'.",
                 )

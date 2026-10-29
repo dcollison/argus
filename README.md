@@ -90,12 +90,20 @@ To completely omit specific packages from audit findings:
 uv run rhada --project . --ignore-package "legacy-test-tool,mock-*"
 ```
 
-#### Approved Licences (`--allow-licence` / `--allow-license`)
-```bash
-# Approve standard open-source licences alongside internal company or proprietary licences
-uv run rhada --project . \
-  --allow-licence "MIT,Apache-2.0,BSD-3-Clause,0BSD,LicenseRef-AcmeCorp,Proprietary"
-```
+#### Approved Licences (`--allow-licence` vs `--allow-extra-licence`)
+- **`--allow-licence` / `--allow-license` (Strict Whitelist)**:
+  Enforces a strict, closed-world allowlist. **Only** the explicitly listed licences are approved. Any package whose licence is not in this list (including standard permissive licences like `MIT` or `Apache-2.0`) will be flagged as unapproved (`LIC-POLICY-NOT-ALLOWED`).
+  ```bash
+  # Enforce that only these exact licences are legally approved across the entire project
+  uv run rhada --project . \
+    --allow-licence "MIT,Apache-2.0,BSD-3-Clause,0BSD,LicenseRef-AcmeCorp,Proprietary"
+  ```
+- **`--allow-extra-licence` / `--allow-extra-license` (Supplemental Allowlist)**:
+  Similar to `--extra-index-url` in pip/uv, this flag **supplements** the default permissive baseline rather than replacing it. It permits specific additional or custom/proprietary licences (e.g. `Proprietary`, `LicenseRef-Corporate`, or commercial SDKs) without requiring you to enumerate every common open-source licence (`MIT`, `Apache-2.0`, etc.).
+  ```bash
+  # Permit a specific proprietary or internal licence while keeping standard open-source licences allowed
+  uv run rhada --project . --allow-extra-licence "Proprietary,LicenseRef-Custom"
+  ```
 
 #### Declarative Configuration in `pyproject.toml`
 All policy rules and operational defaults can be declared in `[tool.rhada]`:
@@ -113,12 +121,16 @@ ignore-packages = [
     "legacy-stub",
 ]
 
-# Approved licenses for your organisation
-allowed-licenses = [
-    "MIT",
-    "Apache-2.0",
-    "BSD-3-Clause",
-    "0BSD",
+# Strict approved licenses for your organisation (closed-world allowlist)
+# allowed-licenses = [
+#     "MIT",
+#     "Apache-2.0",
+#     "BSD-3-Clause",
+#     "0BSD",
+# ]
+
+# Supplemental approved licenses (preserves standard permissive defaults)
+extra-allowed-licenses = [
     "Proprietary",
     "LicenseRef-Corporate",
 ]
@@ -218,7 +230,8 @@ Running `rhada [OPTIONS]` directly defaults to the `audit` command.
 | `--fail-on-license` | `--fail-on-licence` | `critical` \| `high` \| `medium` \| `low` | `high` | Minimum licence compliance finding severity that triggers a non-zero exit code (`2` or `3`). |
 | `--fail-on-linkage` | | *flag* | `false` | Fail with exit code `4` if unresolved binary dynamic linkage dependencies (`DT_NEEDED`) or insecure RPATHs exist. |
 | `--allow-unknown-license` | `--allow-unknown-licence` | *flag* | `false` | Downgrade unknown or unasserted licence findings to `LOW` severity instead of `HIGH`. |
-| `--allow-license` | `--allow-licence`<br>`--allow-licenses`<br>`--allow-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Approved SPDX licence IDs or custom company licences. Packages with approved licences will not generate compliance findings. |
+| `--allow-license` | `--allow-licence`<br>`--allow-licenses`<br>`--allow-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Strict exclusive approved licence allowlist. Any licence not listed is flagged with `LIC-POLICY-NOT-ALLOWED`. |
+| `--allow-extra-license` | `--allow-extra-licence`<br>`--allow-extra-licenses`<br>`--allow-extra-licences`<br>`--extra-allow-license`<br>`--extra-allow-licence`<br>`--extra-allowed-license`<br>`--extra-allowed-licence` | `TEXT` *(repeatable or comma-separated)* | `None` | Supplemental approved licences. Permits additional specific licences without enforcing an exclusive allowlist on standard permissive licences. |
 | `--deny-license` | `--deny-licence`<br>`--deny-licenses`<br>`--deny-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Forbidden SPDX licence IDs. Packages using these licences will generate `HIGH` severity compliance findings. |
 | `--internal-package` | `--internal-packages`<br>`--allow-package`<br>`--allow-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Internal package names or wildcards (e.g. `'mycorp-*'`) to treat as first-party application code. |
 | `--ignore-package` | `--ignore-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Package names or wildcards to completely omit from compliance audit and vulnerability scanning. |

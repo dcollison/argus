@@ -491,3 +491,79 @@ def test_evaluate_spdx_denylist_and_allowlist_with_exceptions() -> None:
     # Allowlist: allowing base license allows WITH exception
     assert evaluate_spdx_allowlist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY"})
     assert evaluate_spdx_allowlist("GPL-3.0-only WITH Classpath-exception-2.0", {"GPL-3.0-ONLY WITH CLASSPATH-EXCEPTION-2.0"})
+
+
+def test_extra_allowed_licenses_supplements_without_squashing_permissive() -> None:
+    """Verify --allow-extra-licence permits custom/proprietary licences without
+    triggering LIC-POLICY-NOT-ALLOWED on standard permissive dependencies."""
+    c_mit = Component(
+        name="mit-helper",
+        version="1.0.0",
+        is_bundled=True,
+        license_info=build_license_info("MIT", license_texts={"LICENSE": "MIT License"}),
+    )
+    c_prop = Component(
+        name="acme-secret",
+        version="2.0.0",
+        is_bundled=True,
+        license_info=build_license_info("LicenseRef-Acme-Proprietary"),
+    )
+
+    # 1. Default audit: Proprietary component is flagged with LIC-PROPRIETARY
+    findings_default = evaluate_compliance(
+        [c_mit, c_prop],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(),
+    )
+    rules_default = {f.rule_id for f in findings_default}
+    assert "LIC-PROPRIETARY" in rules_default
+    assert "LIC-POLICY-NOT-ALLOWED" not in rules_default
+
+    # 2. Strict allowed_licenses={"LicenseRef-Acme-Proprietary"}:
+    #    Flags MIT as LIC-POLICY-NOT-ALLOWED because allowed_licenses is an exclusive allowlist!
+    findings_strict = evaluate_compliance(
+        [c_mit, c_prop],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(allowed_licenses={"LicenseRef-Acme-Proprietary"}),
+    )
+    rules_strict = {f.rule_id for f in findings_strict}
+    assert "LIC-PROPRIETARY" not in rules_strict
+    assert "LIC-POLICY-NOT-ALLOWED" in rules_strict
+    mit_finding = next(f for f in findings_strict if f.component_name == "mit-helper")
+    assert mit_finding.rule_id == "LIC-POLICY-NOT-ALLOWED"
+
+    # 3. Supplemental extra_allowed_licenses={"LicenseRef-Acme-Proprietary"}:
+    #    Permits the proprietary component AND preserves permissive MIT without LIC-POLICY-NOT-ALLOWED!
+    findings_extra = evaluate_compliance(
+        [c_mit, c_prop],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(extra_allowed_licenses={"LicenseRef-Acme-Proprietary"}),
+    )
+    rules_extra = {f.rule_id for f in findings_extra}
+    assert "LIC-PROPRIETARY" not in rules_extra
+    assert "LIC-POLICY-NOT-ALLOWED" not in rules_extra
+    assert len(findings_extra) == 0
+
+    # 4. Combining allowed_licenses + extra_allowed_licenses:
+    #    Strict allowlist allows MIT, extra allows Proprietary, BSD-3-Clause gets rejected
+    c_bsd = Component(
+        name="bsd-lib",
+        version="0.5.0",
+        is_bundled=True,
+        license_info=build_license_info("BSD-3-Clause"),
+    )
+    findings_combined = evaluate_compliance(
+        [c_mit, c_prop, c_bsd],
+        mode=AuditMode.SOURCE,
+        layout=DistributionLayout.SOURCE_WORKSPACE,
+        config=AuditConfig(
+            allowed_licenses={"MIT"},
+            extra_allowed_licenses={"LicenseRef-Acme-Proprietary"},
+        ),
+    )
+    not_allowed = [f for f in findings_combined if f.rule_id == "LIC-POLICY-NOT-ALLOWED"]
+    assert len(not_allowed) == 1
+    assert not_allowed[0].component_name == "bsd-lib"
