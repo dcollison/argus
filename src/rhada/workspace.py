@@ -1272,6 +1272,24 @@ def load_tool_rhada_config(project_path: Path) -> dict[str, Any]:
     if raw_allowed is not None:
         parsed["allowed_licenses"] = _as_set(raw_allowed)
 
+    # extra_allowed_licenses
+    raw_extra_allowed = (
+        rhada_cfg.get("extra-allowed-licenses")
+        or rhada_cfg.get("extra_allowed_licenses")
+        or rhada_cfg.get("extra-allowed-licences")
+        or rhada_cfg.get("extra_allowed_licences")
+        or rhada_cfg.get("allow-extra-licenses")
+        or rhada_cfg.get("allow_extra_licenses")
+        or rhada_cfg.get("allow-extra-licences")
+        or rhada_cfg.get("allow_extra_licences")
+        or rhada_cfg.get("allow-extra-license")
+        or rhada_cfg.get("allow_extra_license")
+        or rhada_cfg.get("allow-extra-licence")
+        or rhada_cfg.get("allow_extra_licence")
+    )
+    if raw_extra_allowed is not None:
+        parsed["extra_allowed_licenses"] = _as_set(raw_extra_allowed)
+
     # denied_licenses
     raw_denied = (
         rhada_cfg.get("denied-licenses")

@@ -585,3 +585,38 @@ dependencies = ["corp-utils>=1.0.0", "legacy-lib>=0.1.0"]
     )
     assert res_pass.exit_code == int(ExitCode.OK), res_pass.output
     assert "internal package" in res_pass.output
+
+
+def test_cli_allow_extra_licence_flags(tmp_path: Path) -> None:
+    ws = tmp_path / "cli_extra_ws"
+    ws.mkdir()
+    (ws / "pyproject.toml").write_text(
+        """[project]
+name = "extra-licence-app"
+version = "1.0.0"
+dependencies = ["mit-helper>=1.0.0", "custom-sdk>=2.0.0"]
+""",
+        encoding="utf-8",
+    )
+    sp = ws / ".venv" / "Lib" / "site-packages"
+    create_dist_info(sp, "mit-helper", "1.0.0", license_str="MIT", top_level=["mit_helper"])
+    create_dist_info(sp, "custom-sdk", "2.0.0", license_str="Proprietary", top_level=["custom_sdk"])
+
+    runner = CliRunner(env={"COLUMNS": "160"})
+
+    # 1. Default run flags custom-sdk as LIC-PROPRIETARY (ExitCode.LICENSE_FAILURE = 2)
+    res_default = runner.invoke(cli, ["--project", str(ws), "--offline"])
+    assert res_default.exit_code == int(ExitCode.LICENSE_FAILURE), res_default.output
+    assert "LIC-PROPRIETARY" in res_default.output
+
+    # 2. Strict --allow-licence "Proprietary" flags mit-helper as LIC-POLICY-NOT-ALLOWED
+    res_strict = runner.invoke(cli, ["--project", str(ws), "--offline", "--allow-licence", "Proprietary"])
+    assert res_strict.exit_code == int(ExitCode.LICENSE_FAILURE), res_strict.output
+    assert "LIC-POLICY-NOT-ALLOWED" in res_strict.output
+
+    # 3. Supplemental --allow-extra-licence "Proprietary" passes OK (0) without flagging MIT
+    for flag in ("--allow-extra-licence", "--allow-extra-license", "--allow-extra-licences", "--allow-extra-licenses"):
+        res_extra = runner.invoke(cli, ["--project", str(ws), "--offline", flag, "Proprietary"])
+        assert res_extra.exit_code == int(ExitCode.OK), f"Failed with {flag}: {res_extra.output}"
+        assert "LIC-POLICY-NOT-ALLOWED" not in res_extra.output
+        assert "LIC-PROPRIETARY" not in res_extra.output

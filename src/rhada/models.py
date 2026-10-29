@@ -511,6 +511,7 @@ class AuditConfig:
     fail_on_linkage: bool = False
     allow_unknown_license: bool = False
     allowed_licenses: set[str] = field(default_factory=set)
+    extra_allowed_licenses: set[str] = field(default_factory=set)
     denied_licenses: set[str] = field(default_factory=set)
     internal_packages: set[str] = field(default_factory=set)
     ignore_packages: set[str] = field(default_factory=set)

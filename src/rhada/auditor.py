@@ -73,6 +73,8 @@ def run_audit(
             config.ignore_packages = set(config.ignore_packages) | tool_cfg["ignore_packages"]
         if "allowed_licenses" in tool_cfg:
             config.allowed_licenses = set(config.allowed_licenses) | tool_cfg["allowed_licenses"]
+        if "extra_allowed_licenses" in tool_cfg:
+            config.extra_allowed_licenses = set(config.extra_allowed_licenses) | tool_cfg["extra_allowed_licenses"]
         if "denied_licenses" in tool_cfg:
             config.denied_licenses = set(config.denied_licenses) | tool_cfg["denied_licenses"]
         if "allow_unknown_license" in tool_cfg and not config.allow_unknown_license:
