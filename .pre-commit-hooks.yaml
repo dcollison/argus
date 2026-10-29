@@ -1,0 +1,17 @@
+- id: rhada
+  name: rhada
+  description: Legal compliance, SBOM generation, and security auditor for Python workspaces.
+  entry: rhada audit
+  language: python
+  types_or: [python, toml]
+  pass_filenames: false
+  always_run: true
+
+- id: rhada-audit
+  name: rhada-audit
+  description: Run Rhada compliance and security vulnerability audit on Python workspace.
+  entry: rhada audit
+  language: python
+  types_or: [python, toml]
+  pass_filenames: false
+  always_run: true

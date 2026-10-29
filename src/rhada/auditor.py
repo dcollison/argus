@@ -1,6 +1,9 @@
+
 """Core orchestrator for Rhada source-workspace and compiled-distribution audits."""
 
 from __future__ import annotations
+
+import contextlib
 
 import httpx
 
@@ -35,7 +38,11 @@ def compute_exit_code(report: AuditReport, config: AuditConfig) -> ExitCode:
     - 3: COMBINED_POLICY_FAILURE (both vulnerability and licence failures)
     - 4: LINKAGE_FAILURE (when fail_on_linkage is enabled and linkage is not self-contained)
     """
-    has_vuln_failure = any(v.severity.meets_threshold(config.fail_on_severity) for v in report.all_vulnerabilities)
+    has_vuln_failure = any(
+        v.severity.meets_threshold(config.fail_on_severity)
+        for v in report.all_vulnerabilities
+        if not v.is_ignored
+    )
     has_license_failure = any(f.severity.meets_threshold(config.fail_on_license) for f in report.compliance_findings)
 
     if has_vuln_failure and has_license_failure:
@@ -75,6 +82,14 @@ def run_audit(
             config.allowed_licenses = set(config.allowed_licenses) | tool_cfg["allowed_licenses"]
         if "extra_allowed_licenses" in tool_cfg:
             config.extra_allowed_licenses = set(config.extra_allowed_licenses) | tool_cfg["extra_allowed_licenses"]
+        if "ignore_vulnerabilities" in tool_cfg:
+            config.ignore_vulnerabilities = set(config.ignore_vulnerabilities) | tool_cfg["ignore_vulnerabilities"]
+        if "ignore_vulnerability_details" in tool_cfg:
+            config.ignore_vulnerability_details.update(tool_cfg["ignore_vulnerability_details"])
+        if "license_files" in tool_cfg:
+            config.license_files = {**tool_cfg["license_files"], **config.license_files}
+        if "license_texts" in tool_cfg:
+            config.license_texts = {**tool_cfg["license_texts"], **config.license_texts}
         if "denied_licenses" in tool_cfg:
             config.denied_licenses = set(config.denied_licenses) | tool_cfg["denied_licenses"]
         if "allow_unknown_license" in tool_cfg and not config.allow_unknown_license:
@@ -198,6 +213,21 @@ def run_audit(
                 "Run with --verbose to view complete distribution file inventory."
             )
 
+    # Apply licence text overrides (from [tool.rhada.license-files] and [tool.rhada.license-texts])
+    if config.license_files or config.license_texts:
+        from pathlib import Path
+        for c in (*report.components, *report.excluded_components):
+            c_name_norm = c.name.lower().replace("_", "-")
+            for target_name, rel_path in config.license_files.items():
+                if target_name.lower().replace("_", "-") == c_name_norm:
+                    file_path = (project_path / rel_path) if not Path(rel_path).is_absolute() else Path(rel_path)
+                    if file_path.is_file():
+                        with contextlib.suppress(OSError):
+                            c.license_info.license_texts[file_path.name] = file_path.read_text(encoding="utf-8", errors="replace")
+            for target_name, raw_text in config.license_texts.items():
+                if target_name.lower().replace("_", "-") == c_name_norm:
+                    c.license_info.license_texts["LICENSE"] = raw_text
+
     # Evaluate legal & licensing compliance
     report.compliance_findings = evaluate_compliance(
         report.components,
@@ -212,6 +242,21 @@ def run_audit(
         osv_warnings = osv_client.audit_components(report.components)
         report.warnings.extend(osv_warnings)
 
+    # Tag ignored vulnerabilities
+    if config.ignore_vulnerabilities:
+        for v in report.all_vulnerabilities:
+            v_id_upper = v.id.upper()
+            is_ign = v_id_upper in config.ignore_vulnerabilities or any(a.upper() in config.ignore_vulnerabilities for a in v.aliases)
+            if is_ign:
+                v.is_ignored = True
+                details = config.ignore_vulnerability_details.get(v_id_upper)
+                if not details:
+                    for a in v.aliases:
+                        if a.upper() in config.ignore_vulnerability_details:
+                            details = config.ignore_vulnerability_details[a.upper()]
+                            break
+                v.ignore_reason = details.get("reason") if details else None
+
     # Compute exit code
     report.exit_code = compute_exit_code(report, config)
 
@@ -220,7 +265,7 @@ def run_audit(
         write_sbom(report, config.sbom_output, fmt=config.sbom_format)
 
     if config.notices_output is not None:
-        write_third_party_notices(report, config.notices_output)
+        write_third_party_notices(report, config.notices_output, fmt=config.notices_format)
 
     if config.report_output is not None:
         write_json_report(report, config.report_output)

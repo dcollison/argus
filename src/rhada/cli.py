@@ -14,7 +14,12 @@ from typer.core import TyperGroup
 
 from rhada import __version__
 from rhada.auditor import run_audit
-from rhada.compliance import generate_third_party_notices, write_third_party_notices
+from rhada.compliance import (
+    generate_third_party_notices,
+    generate_third_party_notices_markdown,
+    write_third_party_notices,
+)
+from rhada.diff import compare_sboms, render_diff_console
 from rhada.elf import is_binary_file, parse_binary, verify_binary_linkage
 from rhada.models import AuditConfig, ConsoleFormat, ExitCode, SbomFormat, Severity
 from rhada.reporter import render_console_report
@@ -267,6 +272,28 @@ def audit_cmd(
             help="Packages or wildcards to completely ignore from compliance audit and vulnerability checks.",
         ),
     ] = None,
+    ignore_vulnerabilities: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--ignore-vulnerability",
+            "--ignore-vulnerabilities",
+            help="Vulnerability or CVE IDs (repeatable or comma-separated) to ignore from failure evaluation.",
+        ),
+    ] = None,
+    license_files: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--license-file",
+            help="Override licence text file for a component in 'component=path' format (repeatable).",
+        ),
+    ] = None,
+    notices_format: Annotated[
+        str,
+        typer.Option(
+            "--notices-format",
+            help="Format for THIRD_PARTY_NOTICES: 'text' or 'markdown' (auto-detected from .md extension).",
+        ),
+    ] = "text",
     verbose: Annotated[
         bool,
         typer.Option(
@@ -285,6 +312,13 @@ def audit_cmd(
         typer.echo(f"Error: Distribution path does not exist: {dist_path}", err=True)
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR))
 
+    lic_files_map: dict[str, str] = {}
+    if license_files:
+        for item in license_files:
+            if "=" in item:
+                k, v = item.split("=", 1)
+                lic_files_map[k.strip().lower()] = v.strip()
+
     config = AuditConfig(
         project_path=project_path,
         dist_path=dist_path,
@@ -301,6 +335,9 @@ def audit_cmd(
         denied_licenses=_split_csv_values(denied_licenses),
         internal_packages=_split_csv_values(internal_packages),
         ignore_packages=_split_csv_values(ignore_packages),
+        ignore_vulnerabilities=_split_csv_values(ignore_vulnerabilities),
+        license_files=lic_files_map,
+        notices_format=notices_format,
         sbom_output=sbom_output,
         sbom_format=sbom_format.value,
         notices_output=notices_output,
@@ -381,8 +418,12 @@ def notices_cmd(
         Path | None,
         typer.Option("--output", "-o", help="Write THIRD_PARTY_NOTICES to a file instead of stdout."),
     ] = None,
+    notices_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="Output format: 'text' or 'markdown' (auto-detected if output path ends with .md)."),
+    ] = "text",
 ) -> None:
-    """Generate a THIRD_PARTY_NOTICES attribution file."""
+    """Generate a THIRD_PARTY_NOTICES attribution file (plain text or markdown)."""
     if not project_path.exists() or (dist_path is not None and not dist_path.exists()):
         typer.echo("Error: Specified project or dist path does not exist.", err=True)
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR))
@@ -391,17 +432,76 @@ def notices_cmd(
         project_path=project_path,
         dist_path=dist_path,
         offline=True,
+        notices_format=notices_format,
     )
     try:
         report = run_audit(config)
+        is_md = notices_format in ("markdown", "md") or (output_path is not None and output_path.suffix.lower() in (".md", ".markdown"))
         if output_path is not None:
-            write_third_party_notices(report, output_path)
-            typer.echo(f"THIRD_PARTY_NOTICES written to {output_path}")
+            write_third_party_notices(report, output_path, fmt=notices_format)
+            typer.echo(f"THIRD_PARTY_NOTICES ({'markdown' if is_md else 'text'}) written to {output_path}")
         else:
-            _safe_echo_text(generate_third_party_notices(report), nl=False)
+            txt = generate_third_party_notices_markdown(report) if is_md else generate_third_party_notices(report)
+            _safe_echo_text(txt, nl=False)
     except (OSError, ValueError, RuntimeError) as exc:
         typer.echo(f"Error generating THIRD_PARTY_NOTICES: {exc}", err=True)
         raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR)) from exc
+
+
+@app.command("diff")
+def diff_cmd(
+    base: Annotated[
+        Path,
+        typer.Argument(help="Path to baseline report JSON or SBOM file (CycloneDX, SPDX, or Rhada JSON)."),
+    ],
+    target: Annotated[
+        Path,
+        typer.Argument(help="Path to target report JSON or SBOM file to compare against baseline."),
+    ],
+    console_format: Annotated[
+        ConsoleFormat,
+        typer.Option("--format", "-f", case_sensitive=False, help="Console output format (table or json)."),
+    ] = ConsoleFormat.TABLE,
+    fail_on_downgrade: Annotated[
+        bool,
+        typer.Option("--fail-on-downgrade", help="Exit with non-zero code if any dependency version was downgraded."),
+    ] = False,
+    fail_on_new_vuln: Annotated[
+        bool,
+        typer.Option("--fail-on-new-vuln", help="Exit with non-zero code if any new security vulnerability was introduced."),
+    ] = False,
+    fail_on_changes: Annotated[
+        bool,
+        typer.Option("--fail-on-changes", help="Exit with non-zero code if any dependency, version, or licence changed."),
+    ] = False,
+) -> None:
+    """Compare two SBOMs or Rhada reports to detect dependency, licence, and vulnerability deltas."""
+    if not base.exists():
+        typer.echo(f"Error: Baseline file does not exist: {base}", err=True)
+        raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR))
+    if not target.exists():
+        typer.echo(f"Error: Target file does not exist: {target}", err=True)
+        raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR))
+
+    try:
+        diff_res = compare_sboms(base, target)
+    except (OSError, ValueError, RuntimeError) as exc:
+        typer.echo(f"Error comparing SBOMs: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.USAGE_OR_IO_ERROR)) from exc
+
+    if console_format == ConsoleFormat.JSON:
+        _safe_echo_text(json.dumps(diff_res.to_dict(), indent=2))
+    else:
+        render_diff_console(diff_res, console=Console(safe_box=True))
+
+    if fail_on_downgrade and diff_res.has_downgrades:
+        raise typer.Exit(code=1)
+    if fail_on_new_vuln and diff_res.new_vulnerabilities:
+        raise typer.Exit(code=1)
+    if fail_on_changes and diff_res.has_changes:
+        raise typer.Exit(code=1)
+
+    raise typer.Exit(code=0)
 
 
 @app.command("inspect-elf")

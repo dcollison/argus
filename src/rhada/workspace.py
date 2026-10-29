@@ -1354,6 +1354,63 @@ def load_tool_rhada_config(project_path: Path) -> dict[str, Any]:
         with contextlib.suppress(ValueError, TypeError):
             parsed["osv_timeout"] = float(raw_timeout)
 
+    # ignore-vulnerabilities
+    raw_vulns = (
+        rhada_cfg.get("ignore-vulnerabilities")
+        or rhada_cfg.get("ignore_vulnerabilities")
+        or rhada_cfg.get("ignore-vulnerability")
+        or rhada_cfg.get("ignore_vulnerability")
+    )
+    if raw_vulns is not None:
+        ignored_set: set[str] = set()
+        details_map: dict[str, dict[str, Any]] = {}
+        from datetime import UTC, date, datetime
+
+        today = datetime.now(UTC).date()
+        if isinstance(raw_vulns, dict):
+            for k, val in raw_vulns.items():
+                vuln_id = str(k).strip().upper()
+                if not vuln_id:
+                    continue
+                reason = ""
+                expires_date: date | None = None
+                if isinstance(val, dict):
+                    reason = str(val.get("reason", "")).strip()
+                    exp_str = val.get("expires") or val.get("until")
+                    if exp_str:
+                        with contextlib.suppress(ValueError, TypeError):
+                            expires_date = date.fromisoformat(str(exp_str).strip())
+                elif isinstance(val, str):
+                    reason = val.strip()
+
+                if expires_date is not None and expires_date < today:
+                    # Ignore rule has expired; do not ignore vulnerability
+                    continue
+
+                ignored_set.add(vuln_id)
+                details_map[vuln_id] = {
+                    "reason": reason or None,
+                    "expires": str(expires_date) if expires_date else None,
+                }
+        else:
+            for s in _as_set(raw_vulns):
+                v_clean = s.strip().upper()
+                if v_clean:
+                    ignored_set.add(v_clean)
+                    details_map[v_clean] = {"reason": None, "expires": None}
+        parsed["ignore_vulnerabilities"] = ignored_set
+        parsed["ignore_vulnerability_details"] = details_map
+
+    # license-files
+    raw_lic_files = rhada_cfg.get("license-files") or rhada_cfg.get("license_files")
+    if isinstance(raw_lic_files, dict):
+        parsed["license_files"] = {str(k).strip().lower(): str(v).strip() for k, v in raw_lic_files.items() if str(k).strip()}
+
+    # license-texts
+    raw_lic_texts = rhada_cfg.get("license-texts") or rhada_cfg.get("license_texts")
+    if isinstance(raw_lic_texts, dict):
+        parsed["license_texts"] = {str(k).strip().lower(): str(v).strip() for k, v in raw_lic_texts.items() if str(k).strip()}
+
     return parsed
 
 
