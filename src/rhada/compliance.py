@@ -608,9 +608,153 @@ def generate_third_party_notices(report: AuditReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_third_party_notices(report: AuditReport, output_path: Path) -> Path:
-    """Write the generated THIRD_PARTY_NOTICES content to disk."""
+def write_third_party_notices(
+    report: AuditReport,
+    output_path: Path,
+    fmt: str = "text",
+) -> Path:
+    """Write the generated THIRD_PARTY_NOTICES content (text or markdown) to disk."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    content = generate_third_party_notices(report)
+    is_md = fmt in ("markdown", "md") or output_path.suffix.lower() in (".md", ".markdown")
+    content = generate_third_party_notices_markdown(report) if is_md else generate_third_party_notices(report)
     output_path.write_text(content, encoding="utf-8")
     return output_path
+
+def generate_third_party_notices_markdown(report: AuditReport) -> str:
+    """
+    Generate a GitHub Flavored Markdown THIRD_PARTY_NOTICES file suitable
+    for repositories, web dashboards, and documentation sites.
+    """
+    bundled = [c for c in report.components if c.is_bundled and not c.is_internal]
+    bundled_sorted = sorted(bundled, key=lambda c: (c.name.lower(), c.version))
+
+    lines: list[str] = [
+        "# Third-Party Software Notices",
+        "",
+        f"- **Application:** {report.target_name} ({report.target_version})",
+        f"- **Audit Mode:** `{report.mode.value}` (`{report.layout.value}`)",
+        "",
+        "This product includes or links to third-party open-source software components.",
+        "Acknowledgements, copyright notices, and licence terms for each component are",
+        "reproduced below in accordance with their respective licence obligations.",
+        "",
+        "> [!NOTE]",
+        "> **Legal Disclaimer**: These third-party notices were automatically compiled by Rhada based",
+        "> on package metadata and static file analysis. Rhada is not a legal advisor and does not",
+        "> provide legal advice or warranty of compliance. Software distributors should review",
+        "> these notices with qualified legal counsel before commercial distribution.",
+        "",
+        "## Component Summary",
+        "",
+    ]
+
+    if not bundled_sorted:
+        lines.append("No third-party runtime components detected.")
+        lines.append("")
+    else:
+        lines.append("| # | Component | Version | Type | Licence | Homepage |")
+        lines.append("| :-: | :--- | :--- | :--- | :--- | :--- |")
+        for idx, comp in enumerate(bundled_sorted, start=1):
+            lic_str = f"`{comp.license_info.spdx_id}`"
+            ctype = "Native Library" if comp.component_type.value == "native-library" else "Python Package"
+            hp = f"[{comp.homepage}]({comp.homepage})" if comp.homepage else "-"
+            lines.append(f"| {idx} | **{comp.name}** | `{comp.version}` | {ctype} | {lic_str} | {hp} |")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append("## Component Licences & Attribution")
+    lines.append("")
+
+    for idx, comp in enumerate(bundled_sorted, start=1):
+        lic = comp.license_info
+        ctype = "Native Library" if comp.component_type.value == "native-library" else "Python Package"
+        lines.append(f"### {idx}. {comp.name} (`{comp.version}`)")
+        lines.append("")
+        lines.append(f"- **Component Type:** {ctype}")
+        lines.append(f"- **Package URL (PURL):** `{comp.purl}`")
+        lines.append(f"- **Licence:** `{lic.spdx_id}`")
+        if comp.homepage:
+            lines.append(f"- **Homepage:** {comp.homepage}")
+        if comp.source_url and comp.source_url != comp.homepage:
+            lines.append(f"- **Source Code:** {comp.source_url}")
+        if lic.is_dual_licensed and lic.license_choices:
+            lines.append(
+                f"- **Dual Licensing:** Dual-licensed (`{' OR '.join(lic.license_choices)}`); "
+                "redistributed under the least restrictive applicable terms."
+            )
+
+        is_lgpl = "LGPL" in lic.spdx_id.upper() or any("LGPL" in c.upper() for c in (lic.license_choices or []))
+        if is_lgpl:
+            src_link = (
+                comp.source_url
+                or comp.homepage
+                or (
+                    f"https://pypi.org/project/{comp.name}/{comp.version}/#files"
+                    if comp.version and comp.version != "unknown"
+                    else f"https://pypi.org/project/{comp.name}/"
+                )
+            )
+            lines.append("")
+            lines.append("> [!IMPORTANT]")
+            lines.append(f"> **LGPL Compliance & Source Code Offer ({lic.spdx_id})**")
+            lines.append(">")
+            lines.append("> In accordance with LGPL requirements (Section 4(d) / Section 6), recipients of")
+            lines.append("> this distribution are entitled to obtain the complete corresponding source code")
+            lines.append(f"> for this library. Upstream source code is accessible at: <{src_link}>")
+
+        # Copyright notices
+        if lic.copyright_notices:
+            lines.append("")
+            lines.append("**Copyright Notices:**")
+            lines.append("```text")
+            lines.extend(lic.copyright_notices)
+            lines.append("```")
+        elif comp.author:
+            lines.append("")
+            lines.append("**Copyright Notices:**")
+            lines.append("```text")
+            lines.append(f"Copyright (c) {comp.author}")
+            lines.append("```")
+
+        # Verbatim NOTICE / AUTHORS texts
+        if lic.notice_texts:
+            for notice_filename, notice_body in sorted(lic.notice_texts.items()):
+                lines.append("")
+                lines.append(f"<details><summary><strong>Notice File ({notice_filename})</strong></summary>")
+                lines.append("")
+                lines.append("```text")
+                lines.append(notice_body.strip())
+                lines.append("```")
+                lines.append("</details>")
+
+        # Verbatim LICENSE texts or canonical fallback
+        if lic.license_texts:
+            for lic_filename, lic_body in sorted(lic.license_texts.items()):
+                lines.append("")
+                lines.append(f"<details open><summary><strong>Verbatim Licence ({lic_filename})</strong></summary>")
+                lines.append("")
+                lines.append("```text")
+                lines.append(lic_body.strip())
+                lines.append("```")
+                lines.append("</details>")
+        else:
+            primary_choice = lic.license_choices[0] if lic.license_choices else lic.spdx_id
+            canonical = CANONICAL_LICENSE_FALLBACKS.get(primary_choice) or CANONICAL_LICENSE_FALLBACKS.get(lic.spdx_id)
+            if canonical:
+                lines.append("")
+                lines.append(f"<details><summary><strong>Canonical Licence Notice ({primary_choice})</strong></summary>")
+                lines.append("")
+                lines.append("```text")
+                lines.append(canonical.strip())
+                lines.append("```")
+                lines.append("</details>")
+            else:
+                lines.append("")
+                lines.append(f"- **Declared Licence:** `{lic.declared_raw}` (`{lic.spdx_id}`)")
+
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    return "\n".join(lines).strip() + "\n"

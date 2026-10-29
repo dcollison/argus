@@ -307,13 +307,22 @@ def render_console_report(
         vuln_table.add_column("Component", overflow="fold")
         vuln_table.add_column("Summary & Actionable Remediation", overflow="fold")
 
-        for v in sorted(all_vulns, key=lambda x: (-x.severity.rank, x.id)):
+        ignored_count = sum(1 for v in all_vulns if v.is_ignored)
+        if ignored_count:
+            summary_str += f" | [yellow]{ignored_count} ignored by policy[/yellow]"
+
+        for v in sorted(all_vulns, key=lambda x: (x.is_ignored, -x.severity.rank, x.id)):
             s_style = SEVERITY_COLORS.get(v.severity, "white")
             cve_str = f"{v.id}\n({v.primary_cve})" if v.primary_cve and v.primary_cve != v.id else v.id
             score_str = f"{v.cvss_score:.1f}" if v.cvss_score is not None else "N/A"
+            if v.is_ignored:
+                reason_note = f"\n[yellow]Ignored: {v.ignore_reason}[/yellow]" if v.ignore_reason else "\n[yellow]Ignored by policy[/yellow]"
+                sev_cell = f"[dim strike]{v.severity.value.upper()}[/dim strike]{reason_note}"
+            else:
+                sev_cell = f"[{s_style}]{v.severity.value.upper()}[/{s_style}]"
             vuln_table.add_row(
                 cve_str,
-                f"[{s_style}]{v.severity.value.upper()}[/{s_style}]",
+                sev_cell,
                 score_str,
                 f"{v.component_name}@{v.component_version}",
                 f"{v.summary}\n[bold cyan]Remediation:[/bold cyan] {v.remediation}",

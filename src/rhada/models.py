@@ -184,6 +184,8 @@ class Vulnerability:
     component_name: str = ""
     component_version: str = ""
     ecosystem: str = "PyPI"
+    is_ignored: bool = False
+    ignore_reason: str | None = None
 
     @property
     def primary_cve(self) -> str | None:
@@ -225,6 +227,8 @@ class Vulnerability:
             "component_name": self.component_name,
             "component_version": self.component_version,
             "ecosystem": self.ecosystem,
+            "is_ignored": self.is_ignored,
+            "ignore_reason": self.ignore_reason,
         }
 
 
@@ -515,6 +519,11 @@ class AuditConfig:
     denied_licenses: set[str] = field(default_factory=set)
     internal_packages: set[str] = field(default_factory=set)
     ignore_packages: set[str] = field(default_factory=set)
+    ignore_vulnerabilities: set[str] = field(default_factory=set)
+    ignore_vulnerability_details: dict[str, dict[str, Any]] = field(default_factory=dict)
+    license_files: dict[str, str] = field(default_factory=dict)
+    license_texts: dict[str, str] = field(default_factory=dict)
+    notices_format: str = "text"
     sbom_output: Path | None = None
     sbom_format: str = "cyclonedx"
     notices_output: Path | None = None

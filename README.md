@@ -40,6 +40,18 @@ uv sync
 uv run rhada --help
 ```
 
+### Pre-Commit Hook Integration
+
+Add Rhada to your `.pre-commit-config.yaml` to audit source workspaces automatically before each commit:
+
+```yaml
+repos:
+  - repo: https://github.com/dcollison/rhada
+    rev: v0.1.0
+    hooks:
+      - id: rhada
+```
+
 ## CLI Usage
 
 ### 1. Audit a Python / `uv` Source Workspace
@@ -141,6 +153,30 @@ fail-on-license = "high"
 allow-unknown-license = false
 verbose = false
 offline = false
+
+# Ignore specific vulnerabilities (supports advisory ID, reason, and optional expiry date)
+[tool.rhada.ignore-vulnerabilities]
+"CVE-2024-99999" = "Non-exploitable in CLI context"
+"GHSA-34jh-p97f-mpxf" = { reason = "Awaiting upstream patch", expires = "2026-12-31" }
+
+# Override missing verbatim license texts for packages lacking LICENSE files in their wheels
+[tool.rhada.license-files]
+"some-legacy-package" = "licenses/legacy-license.txt"
+
+[tool.rhada.license-texts]
+"proprietary-sdk" = "Copyright (c) 2026 Acme Corp. All rights reserved."
+```
+
+#### Ignoring Specific Vulnerabilities (`--ignore-vulnerability`)
+If an upstream dependency has an advisory that is not exploitable in your application or has no patch available yet, ignore specific IDs without disabling checks for the rest of the package:
+```bash
+uv run rhada --project . --ignore-vulnerability "CVE-2024-99999,GHSA-34jh-p97f-mpxf"
+```
+
+#### Licence Text Overrides (`--license-file` and `[tool.rhada.license-files]`)
+When an open-source wheel omits a verbatim `LICENSE` file (triggering `LIC-MISSING-TEXT`), provide a local file or inline text to satisfy attribution requirements:
+```bash
+uv run rhada --project . --license-file "legacy-lib=licenses/legacy-lib.txt"
 ```
 
 CLI flags supplement and take precedence over `pyproject.toml` settings.
@@ -181,8 +217,13 @@ The complete inventory is also serialized under `file_inventory` in JSON reports
 # Generate SBOM to stdout or file
 uv run rhada sbom --project . --format spdx --output sbom.spdx.json
 
-# Generate THIRD_PARTY_NOTICES
+# Generate THIRD_PARTY_NOTICES (plain text or GitHub-flavoured Markdown)
 uv run rhada notices --project . --dist ./build/app.dist --output THIRD_PARTY_NOTICES
+uv run rhada notices --project . --format markdown --output THIRD_PARTY_NOTICES.md
+
+# Compare two SBOMs or audit reports to inspect dependency, licence, and vulnerability changes
+uv run rhada diff base-report.json new-report.json
+uv run rhada diff base-sbom.json new-sbom.json --fail-on-new-vuln --fail-on-downgrade
 
 # Inspect ELF binaries and DT_NEEDED linkage directly
 uv run rhada inspect-elf ./build/app.dist
@@ -220,6 +261,7 @@ Running `rhada [OPTIONS]` directly defaults to the `audit` command.
 | `--sbom` | | `PATH` | `None` | Write a machine-readable SBOM JSON file to the specified path. |
 | `--sbom-format` | | `cyclonedx` \| `spdx` | `cyclonedx` | SBOM standard specification format. |
 | `--notices` | | `PATH` | `None` | Write a `THIRD_PARTY_NOTICES` attribution file to the specified path. |
+| `--notices-format` | | `text` \| `markdown` | `text` | Attribution file format (auto-detected if output path ends with `.md`). |
 | `--verbose` | `-v`, `--full` | *flag* | `false` | Show detailed distribution file accounting and component mapping breakdown. |
 
 #### Policy & Compliance Options
@@ -235,6 +277,8 @@ Running `rhada [OPTIONS]` directly defaults to the `audit` command.
 | `--deny-license` | `--deny-licence`<br>`--deny-licenses`<br>`--deny-licences` | `TEXT` *(repeatable or comma-separated)* | `None` | Forbidden SPDX licence IDs. Packages using these licences will generate `HIGH` severity compliance findings. |
 | `--internal-package` | `--internal-packages`<br>`--allow-package`<br>`--allow-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Internal package names or wildcards (e.g. `'mycorp-*'`) to treat as first-party application code. |
 | `--ignore-package` | `--ignore-packages` | `TEXT` *(repeatable or comma-separated)* | `None` | Package names or wildcards to completely omit from compliance audit and vulnerability scanning. |
+| `--ignore-vulnerability` | `--ignore-vulnerabilities` | `TEXT` *(repeatable or comma-separated)* | `None` | Advisory or CVE IDs to ignore from failure evaluation (renders as ignored in reports). |
+| `--license-file` | | `TEXT` *(repeatable)* | `None` | Override licence text file for a component in `component=path` format. |
 
 ### Subcommands Reference
 
@@ -249,6 +293,13 @@ Running `rhada [OPTIONS]` directly defaults to the `audit` command.
 | `notices` | `--project` | `-p` | `PATH` | `.` | Project workspace root. |
 | | `--dist` | `-d` | `PATH` | `None` | Compiled distribution directory or binary. |
 | | `--output` | `-o` | `PATH` | *stdout* | Output file path (writes to stdout if omitted). |
+| | `--format` | `-f` | `text` \| `markdown` | `text` | Notices format (auto-detected if output path ends with `.md`). |
+| `diff` | `BASE` | | `PATH` *(arg)* | *(required)* | Baseline SBOM or report JSON file. |
+| | `TARGET` | | `PATH` *(arg)* | *(required)* | Target SBOM or report JSON file to compare against baseline. |
+| | `--format` | `-f` | `table` \| `json` | `table` | Console output format. |
+| | `--fail-on-downgrade` | | *flag* | `false` | Fail with exit code 1 if any dependency version was downgraded. |
+| | `--fail-on-new-vuln` | | *flag* | `false` | Fail with exit code 1 if any new vulnerability was introduced. |
+| | `--fail-on-changes` | | *flag* | `false` | Fail with exit code 1 if any dependency, version, or licence changed. |
 | `inspect-elf` / `inspect-binary` | `TARGET` | | `PATH` *(arg)* | *(required)* | Target ELF/PE binary (`.so`, `.dll`, `.pyd`, `.exe`) or distribution directory to inspect for dependencies and dynamic linkage. |
 
 ## Exit Codes
