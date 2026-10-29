@@ -41,3 +41,6 @@ example_package/
 # IDE
 .idea/
 .vscode/
+
+# Local Gemini / Agent context
+GEMINI.md
