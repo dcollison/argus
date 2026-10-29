@@ -303,14 +303,19 @@ def parse_nuitka_compilation_report(xml_path: Path, result: DistInspectionResult
         usage = (mod_elem.get("usage") or "").lower()
 
         # Identify first-party project source code
+        is_site_packages = (
+            "${sys." in source_path
+            or "site-packages" in source_path
+            or "dist-packages" in source_path
+        )
         is_project_code = (
-            source_path.startswith(("${cwd}", "./", "/"))
-            or usage == "root_module"
+            usage == "root_module"
             or (
-                not dist_attr
-                and "${sys." not in source_path
-                and "site-packages" not in source_path
-                and "dist-packages" not in source_path
+                not is_site_packages
+                and not dist_attr
+                and (
+                    source_path.startswith(("${cwd}", "./", "/")) or not source_path
+                )
             )
         )
         if is_project_code:
@@ -755,6 +760,10 @@ def inspect_compiled_distribution(
             for candidate_xml in (
                 dist_path.parent / "compilation-report.xml",
                 dist_path.parent / "nuitka-compilation-report.xml",
+                dist_path.parent / "report.xml",
+                Path("compilation-report.xml"),
+                Path("nuitka-compilation-report.xml"),
+                Path("report.xml"),
             ):
                 if candidate_xml.is_file():
                     parse_nuitka_compilation_report(candidate_xml, result)
@@ -772,7 +781,13 @@ def inspect_compiled_distribution(
         for candidate_xml in (
             dist_path / "compilation-report.xml",
             dist_path / "nuitka-compilation-report.xml",
+            dist_path / "report.xml",
             dist_path.parent / "compilation-report.xml",
+            dist_path.parent / "nuitka-compilation-report.xml",
+            dist_path.parent / "report.xml",
+            Path("compilation-report.xml"),
+            Path("nuitka-compilation-report.xml"),
+            Path("report.xml"),
         ):
             if candidate_xml.is_file():
                 parse_nuitka_compilation_report(candidate_xml, result)
