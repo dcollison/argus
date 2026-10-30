@@ -303,20 +303,11 @@ def parse_nuitka_compilation_report(xml_path: Path, result: DistInspectionResult
         usage = (mod_elem.get("usage") or "").lower()
 
         # Identify first-party project source code
-        is_site_packages = (
-            "${sys." in source_path
-            or "site-packages" in source_path
-            or "dist-packages" in source_path
-        )
-        is_project_code = (
-            usage == "root_module"
-            or (
-                not is_site_packages
-                and not dist_attr
-                and (
-                    source_path.startswith(("${cwd}", "./", "/")) or not source_path
-                )
-            )
+        is_site_packages = "${sys." in source_path or "site-packages" in source_path or "dist-packages" in source_path
+        is_project_code = usage == "root_module" or (
+            not is_site_packages
+            and not dist_attr
+            and (source_path.startswith(("${cwd}", "./", "/")) or not source_path)
         )
         if is_project_code:
             result.project_modules.add(mod_name)
@@ -1337,11 +1328,7 @@ def build_distribution_file_inventory(
         project_mods.update(dist_res.project_modules)
 
     python_comp = next((c for c in components if c.name in ("python", "cpython", "libpython")), None)
-    py_ver = (
-        python_comp.version
-        if python_comp and python_comp.version not in ("0.0.0", "0", "unknown")
-        else None
-    )
+    py_ver = python_comp.version if python_comp and python_comp.version not in ("0.0.0", "0", "unknown") else None
 
     # Pre-map component lookups
     comp_by_name = {c.name: c for c in components}
@@ -1435,24 +1422,14 @@ def build_distribution_file_inventory(
                 or first_seg in project_mods
             )
             if not is_pkg_mod and (
-                top in STDLIB_MODULES
-                or top.lstrip("_") in STDLIB_MODULES
-                or top.startswith("_codecs_")
+                top in STDLIB_MODULES or top.lstrip("_") in STDLIB_MODULES or top.startswith("_codecs_")
             ):
                 category = DistributionFileCategory.PYTHON_RUNTIME
                 comp_name = "python"
                 comp_ver = py_ver
                 desc = f"CPython standard library C-extension ({top})"
 
-        # 4. Compiler Runtime & Operating System ABI
-        if category == DistributionFileCategory.UNACCOUNTED and (
-            is_windows_msvc_runtime_dll(fname) or is_windows_compiler_runtime_dll(fname) or is_system_abi_lib(fname)
-        ):
-            category = DistributionFileCategory.COMPILER_ABI
-            comp_name = "msvc-runtime" if is_windows_msvc_runtime_dll(fname) else "compiler-abi"
-            desc = f"Compiler runtime / Platform ABI library ({fname})"
-
-        # 5. Vendored Native Shared Libraries
+        # 4. Vendored Native Shared Libraries
         if category == DistributionFileCategory.UNACCOUNTED:
             for nat in native_components:
                 if (
@@ -1467,6 +1444,14 @@ def build_distribution_file_inventory(
                     prov = f" (vendored by {nat.origin_package})" if nat.origin_package else ""
                     desc = f"Native shared library ({nat.name}){prov}"
                     break
+
+        # 5. Compiler Runtime & Operating System ABI
+        if category == DistributionFileCategory.UNACCOUNTED and (
+            is_windows_msvc_runtime_dll(fname) or is_windows_compiler_runtime_dll(fname) or is_system_abi_lib(fname)
+        ):
+            category = DistributionFileCategory.COMPILER_ABI
+            comp_name = "msvc-runtime" if is_windows_msvc_runtime_dll(fname) else "compiler-abi"
+            desc = f"Compiler runtime / Platform ABI library ({fname})"
 
         # 6. Bundled Third-Party Python Packages & Native Wheel Libs
         if category == DistributionFileCategory.UNACCOUNTED:

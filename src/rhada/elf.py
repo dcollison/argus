@@ -70,6 +70,7 @@ SYSTEM_ABI_PREFIXES = (
     "libcrypt.so",
     "libanl.so",
     "libBrokenLocale.so",
+    "libz.so",
 )
 
 # Compiler runtime libraries commonly present on target systems (warn as LOW if not bundled)
@@ -117,7 +118,13 @@ VERSION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("bzip2", re.compile(r"\bbzip2/libbzip2\s+version\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
     ("libffi", re.compile(r"\blibffi\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
     ("gmp", re.compile(r"\bGNU\s+MP\s+Library\s+version\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
-    ("mkl", re.compile(r"\bIntel(?:\(R\))?\s+(?:oneAPI\s+)?(?:Math\s+Kernel\s+Library|MKL)\s+(?:Version\s+)?(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
+    (
+        "mkl",
+        re.compile(
+            r"\bIntel(?:\(R\))?\s+(?:oneAPI\s+)?(?:Math\s+Kernel\s+Library|MKL)\s+(?:Version\s+)?(\d+\.\d+(?:\.\d+)?)",
+            re.IGNORECASE,
+        ),
+    ),
     ("readline", re.compile(r"\bReadline\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
     ("python", re.compile(r"\bPython\s+(\d+\.\d+\.\d+)", re.IGNORECASE)),
     ("libuuid", re.compile(r"\butil-linux\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
@@ -163,53 +170,55 @@ def normalize_pkg_name(name: str) -> str:
         return re.sub(r"[-_.]+", "-", name).lower().strip("-")
 
 
-SYSTEM_GENERIC_SEGMENTS: frozenset[str] = frozenset({
-    "bin",
-    "scripts",
-    "include",
-    "share",
-    "__pycache__",
-    "lib",
-    "lib64",
-    "lib32",
-    "usr",
-    "etc",
-    "var",
-    "opt",
-    "dist",
-    "build",
-    "windows",
-    "system32",
-    "syswow64",
-    "home",
-    "users",
-    "user",
-    "root",
-    "tmp",
-    "temp",
-    "appdata",
-    "local",
-    "roaming",
-    "program files",
-    "program files (x86)",
-    "mnt",
-    "media",
-    "srv",
-    "run",
-    "dev",
-    "target",
-    "release",
-    "debug",
-    "output",
-    "artifacts",
-    "deploy",
-    "out",
-    "venv",
-    ".venv",
-    "env",
-    ".env",
-    "virtualenvs",
-})
+SYSTEM_GENERIC_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "bin",
+        "scripts",
+        "include",
+        "share",
+        "__pycache__",
+        "lib",
+        "lib64",
+        "lib32",
+        "usr",
+        "etc",
+        "var",
+        "opt",
+        "dist",
+        "build",
+        "windows",
+        "system32",
+        "syswow64",
+        "home",
+        "users",
+        "user",
+        "root",
+        "tmp",
+        "temp",
+        "appdata",
+        "local",
+        "roaming",
+        "program files",
+        "program files (x86)",
+        "mnt",
+        "media",
+        "srv",
+        "run",
+        "dev",
+        "target",
+        "release",
+        "debug",
+        "output",
+        "artifacts",
+        "deploy",
+        "out",
+        "venv",
+        ".venv",
+        "env",
+        ".env",
+        "virtualenvs",
+    }
+)
 
 
 def infer_binary_provenance(
@@ -310,11 +319,17 @@ def infer_binary_provenance(
         return known_pkg, f"vendored-in-wheel:{known_pkg}"
 
     # 6. Relative non-absolute path check (e.g. "my_custom_package/sub/libcustom.so")
-    is_abs = Path(path_str.replace("\\", "/")).is_absolute() or clean_p.startswith("/") or (len(segments) > 0 and len(segments[0]) == 2 and segments[0][1] == ":")
+    is_abs = (
+        Path(path_str.replace("\\", "/")).is_absolute()
+        or clean_p.startswith("/")
+        or (len(segments) > 0 and len(segments[0]) == 2 and segments[0][1] == ":")
+    )
     if not is_abs and len(segments) > 1:
         first_seg = segments[0]
         if first_seg.lower() not in SYSTEM_GENERIC_SEGMENTS and not (len(first_seg) == 2 and first_seg[1] == ":"):
-            norm_pkg = normalize_pkg_name(first_seg.removesuffix(".dist-info").removesuffix(".libs").removesuffix(".dylibs"))
+            norm_pkg = normalize_pkg_name(
+                first_seg.removesuffix(".dist-info").removesuffix(".libs").removesuffix(".dylibs")
+            )
             if norm_pkg and norm_pkg.replace("-", "_").isidentifier():
                 return norm_pkg, f"vendored-in-wheel:{norm_pkg}"
 
@@ -492,7 +507,7 @@ def _parse_elf_struct_fallback(data: bytes, path_str: str, sha256: str) -> ElfBi
     e_type, e_machine = struct.unpack_from(f"{endian}HH", data, 16)
     arch = MACHINE_MAP.get(e_machine, f"unknown({e_machine})")
     is_exec = e_type == 2  # ET_EXEC
-    is_dyn = e_type == 3   # ET_DYN
+    is_dyn = e_type == 3  # ET_DYN
 
     # Parse Program Headers to locate PT_DYNAMIC (2) and PT_INTERP (3)
     has_dynamic = False
@@ -886,6 +901,9 @@ def verify_binary_linkage(
                 stem_match = re.match(r"^(lib[a-zA-Z0-9_+-]+\.so(?:\.\d+)?)", needed_name)
                 if stem_match:
                     resolved = bundled_index.get(stem_match.group(1))
+            if not resolved and ".so." in needed_name:
+                base_so = f"{needed_name.split('.so.', 1)[0]}.so"
+                resolved = bundled_index.get(base_so) or bundled_index.get(base_so.lower())
 
             if resolved:
                 report.resolved_dependencies[needed_name] = resolved
@@ -1014,8 +1032,8 @@ def elf_to_native_component(
         or any(s.startswith(("PyInit_", "_PyInit_")) for s in elf_info.exported_symbols_sample)
     ):
         return None
-    # Skip OS system ABI and MSVC CRT redistributable libraries
-    if is_system_abi_lib(fname) or is_windows_msvc_runtime_dll(fname):
+    # Skip MSVC CRT redistributable libraries
+    if is_windows_msvc_runtime_dll(fname):
         return None
     # Skip main executable unless it's a shared library
     if elf_info.is_executable and not (fname_lower.startswith("lib") or fname_lower.endswith(".dll")):
@@ -1042,11 +1060,11 @@ def elf_to_native_component(
     if profile is None and elf_info.detected_library_name:
         profile = _match_known_native_profile(elf_info.detected_library_name)
 
-    lib_name = (
-        profile.canonical_name
-        if profile
-        else (elf_info.detected_library_name or canonical_key or fname)
-    )
+    # Skip OS system ABI libraries unless recognized as a known bundled native library (e.g. zlib)
+    if profile is None and is_system_abi_lib(fname):
+        return None
+
+    lib_name = profile.canonical_name if profile else (elf_info.detected_library_name or canonical_key or fname)
     version = elf_info.detected_version or "unknown"
 
     if profile:

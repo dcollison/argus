@@ -482,6 +482,7 @@ def test_unidentified_version_explicit_unknown() -> None:
     assert "unknown" in cli_out
     assert "@0.0.0" not in cli_out
 
+
 def test_nuitka_linux_site_packages_and_report_discovery(tmp_path: Path) -> None:
     """Verify Linux absolute paths in site-packages are not misidentified as project modules,
     and report.xml is auto-discovered in dist_path.parent."""
@@ -522,3 +523,106 @@ def test_nuitka_linux_site_packages_and_report_discovery(tmp_path: Path) -> None
     assert "opendis" in dist_res.discovered_distributions
     assert "typing-extensions" in dist_res.discovered_distributions
 
+
+def test_libz_system_abi_linkage_when_unbundled() -> None:
+    """Verify libz.so.1 is recognized as a standard host OS / system ABI library when not bundled."""
+    from rhada.elf import ElfBinaryInfo, is_system_abi_lib, verify_binary_linkage
+    from rhada.models import LinkageStatus, Severity
+
+    assert is_system_abi_lib("libz.so")
+    assert is_system_abi_lib("libz.so.1")
+    assert is_system_abi_lib("libz.so.1.2.11")
+
+    binary = ElfBinaryInfo(
+        path="dist/app.bin",
+        binary_format="ELF",
+        needed_libs=["libz.so.1", "libc.so.6", "libm.so.6"],
+    )
+
+    report = verify_binary_linkage([binary])
+    assert report.is_self_contained
+    assert report.unresolved_dependencies == []
+    assert "libz.so.1" in report.system_abi_dependencies
+    assert "libc.so.6" in report.system_abi_dependencies
+    assert "libm.so.6" in report.system_abi_dependencies
+
+    zlib_issues = [iss for iss in report.linkage_issues if iss.needed_lib == "libz.so.1"]
+    assert len(zlib_issues) == 1
+    assert zlib_issues[0].status == LinkageStatus.SYSTEM_ABI
+    assert zlib_issues[0].severity == Severity.NONE
+    assert zlib_issues[0].provenance == "system-abi:linux"
+
+
+def test_libz_bundled_resolution_with_unversioned_fallback(tmp_path: Path) -> None:
+    """Verify that needed 'libz.so.1' resolves to bundled unversioned 'libz.so' as BUNDLED."""
+    from rhada.elf import ElfBinaryInfo, verify_binary_linkage
+    from rhada.models import LinkageStatus
+
+    dist_dir = tmp_path / "app.dist"
+    dist_dir.mkdir()
+    bundled_libz = dist_dir / "libz.so"
+    bundled_libz.write_bytes(b"\x7fELF" + bytes(100))
+
+    binary = ElfBinaryInfo(
+        path=str(dist_dir / "my_app"),
+        binary_format="ELF",
+        needed_libs=["libz.so.1"],
+    )
+
+    report = verify_binary_linkage([binary], dist_root=dist_dir)
+    assert report.is_self_contained
+    assert report.unresolved_dependencies == []
+    assert "libz.so.1" in report.resolved_dependencies
+    assert report.system_abi_dependencies == []
+
+    bundled_issues = [iss for iss in report.linkage_issues if iss.needed_lib == "libz.so.1"]
+    assert len(bundled_issues) == 1
+    assert bundled_issues[0].status == LinkageStatus.BUNDLED
+
+
+def test_libz_native_component_recognition_and_inventory(tmp_path: Path) -> None:
+    """Verify bundled libz.so.1 is captured as a zlib native component and categorized as NATIVE_LIBRARY."""
+    from rhada.dist import build_distribution_file_inventory
+    from rhada.elf import ElfBinaryInfo, elf_to_native_component
+    from rhada.models import DistributionFileCategory
+
+    # 1. Component creation
+    zlib_elf = ElfBinaryInfo(
+        path="app.dist/libz.so.1",
+        binary_format="ELF",
+        soname="libz.so.1",
+        detected_library_name="libz",
+        detected_version="1.2.11",
+    )
+    comp = elf_to_native_component(zlib_elf)
+    assert comp is not None
+    assert comp.name == "zlib"
+    assert comp.license_info.spdx_id == "Zlib"
+    assert comp.license_info.declared_raw == "Zlib"
+
+    # Glibc internals must still be skipped
+    libc_elf = ElfBinaryInfo(
+        path="app.dist/libc.so.6",
+        binary_format="ELF",
+        soname="libc.so.6",
+    )
+    assert elf_to_native_component(libc_elf) is None
+
+    # 2. File inventory categorization
+    dist_dir = tmp_path / "app.dist"
+    dist_dir.mkdir()
+    libz_file = dist_dir / "libz.so.1"
+    libz_file.write_bytes(b"\x7fELF" + bytes(100))
+
+    comp.bundled_files = ["libz.so.1"]
+    inv = build_distribution_file_inventory(
+        dist_path=dist_dir,
+        target_name="app",
+        target_version="1.0.0",
+        components=[],
+        native_components=[comp],
+    )
+    libz_entry = next((f for f in inv.files if f.path == "libz.so.1"), None)
+    assert libz_entry is not None
+    assert libz_entry.category == DistributionFileCategory.NATIVE_LIBRARY
+    assert libz_entry.component_name == "zlib"
