@@ -499,6 +499,22 @@ KNOWN_NATIVE_LIBRARIES: dict[str, NativeLibraryProfile] = {
         copyright_notice="Copyright (c) 1996-2024 Anthony Green, Red Hat, Inc and others.",
         license_text="Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the 'Software'), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.",
     ),
+    "libuuid": NativeLibraryProfile(
+        canonical_name="libuuid",
+        spdx_id="LGPL-2.1-or-later",
+        homepage="https://github.com/util-linux/util-linux",
+        copyright_notice="Copyright (C) 1996-2024 Theodore Ts'o and util-linux contributors.",
+        license_text="This library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.",
+        source_url="https://github.com/util-linux/util-linux/tree/master/libuuid",
+    ),
+    "uuid": NativeLibraryProfile(
+        canonical_name="libuuid",
+        spdx_id="LGPL-2.1-or-later",
+        homepage="https://github.com/util-linux/util-linux",
+        copyright_notice="Copyright (C) 1996-2024 Theodore Ts'o and util-linux contributors.",
+        license_text="This library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option) any later version.",
+        source_url="https://github.com/util-linux/util-linux/tree/master/libuuid",
+    ),
     "libexpat": NativeLibraryProfile(
         canonical_name="expat",
         spdx_id="MIT",

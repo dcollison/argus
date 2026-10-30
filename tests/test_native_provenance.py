@@ -767,3 +767,66 @@ def test_sbom_intra_native_dependency_resolution() -> None:
     ]
     assert len(depends_rels) == 1
 
+
+def test_libuuid_lgpl_and_version_normalization(tmp_path: Path) -> None:
+    """Verify libuuid SONAME .so.1 ABI version is normalized to unknown (not 1) and identified as LGPL."""
+    from rhada.compliance import evaluate_compliance
+    from rhada.elf import _infer_library_identity, elf_to_native_component
+    from rhada.models import DistributionLayout, LicenseRiskCategory
+
+    # 1. Test library identity inference
+    det_lib, det_ver = _infer_library_identity("libuuid.so.1", "libuuid.so.1", [])
+    assert det_lib == "libuuid"
+    assert det_ver == "unknown"  # SONAME ABI .so.1 must not be treated as software version 1
+
+    # Dotted SONAME suffix or embedded strings correctly identify versions
+    _, det_ver_dotted = _infer_library_identity("libuuid.so.1.3.0", "libuuid.so.1.3.0", [])
+    assert det_ver_dotted == "1.3.0"
+
+    _, det_ver_util = _infer_library_identity("libuuid.so.1", "libuuid.so.1", ["util-linux 2.39.3 release banner"])
+    assert det_ver_util == "2.39.3"
+
+    _, det_ver_sym = _infer_library_identity("libuuid.so.1", "libuuid.so.1", ["UUID_2.36", "UUID_1.0"])
+    assert det_ver_sym == "2.36"
+
+    # 2. Test ELF parsing of synthetic libuuid.so.1
+    so_file = tmp_path / "libuuid.so.1"
+    so_file.write_bytes(build_synthetic_elf64(soname="libuuid.so.1"))
+
+    info = parse_binary(so_file)
+    assert info.detected_library_name == "libuuid"
+    assert info.detected_version == "unknown"
+    assert info.license_spdx == "LGPL-2.1-or-later"
+    assert "Theodore Ts'o" in info.copyright
+
+    # 3. Test Component generation
+    comp = elf_to_native_component(info, is_monolithic=False)
+    assert comp is not None
+    assert comp.name == "libuuid"
+    assert comp.version == "unknown"
+    assert comp.license_info.spdx_id == "LGPL-2.1-or-later"
+    assert comp.license_info.risk_category == LicenseRiskCategory.WEAK_COPYLEFT
+    assert "Theodore Ts'o" in comp.license_info.copyright_notices[0]
+    assert "util-linux" in comp.homepage
+
+    # 4. Compliance evaluation: Weak copyleft dynamic obligation vs monolithic
+    findings_dyn = evaluate_compliance(
+        [comp],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.STANDALONE_DIR,
+        config=AuditConfig(),
+    )
+    rule_ids_dyn = [f.rule_id for f in findings_dyn]
+    assert "LIC-LGPL-DYNAMIC" in rule_ids_dyn
+    assert "LIC-NOASSERTION" not in rule_ids_dyn
+
+    comp_mono = elf_to_native_component(info, is_monolithic=True)
+    assert comp_mono is not None
+    findings_mono = evaluate_compliance(
+        [comp_mono],
+        mode=AuditMode.COMPILED_DIST,
+        layout=DistributionLayout.MONOLITHIC_BINARY,
+        config=AuditConfig(),
+    )
+    rule_ids_mono = [f.rule_id for f in findings_mono]
+    assert "LIC-LGPL-MONOLITHIC" in rule_ids_mono
