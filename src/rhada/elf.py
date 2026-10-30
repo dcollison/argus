@@ -120,6 +120,8 @@ VERSION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("mkl", re.compile(r"\bIntel(?:\(R\))?\s+(?:oneAPI\s+)?(?:Math\s+Kernel\s+Library|MKL)\s+(?:Version\s+)?(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
     ("readline", re.compile(r"\bReadline\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
     ("python", re.compile(r"\bPython\s+(\d+\.\d+\.\d+)", re.IGNORECASE)),
+    ("libuuid", re.compile(r"\butil-linux\s+(\d+\.\d+(?:\.\d+)?)", re.IGNORECASE)),
+    ("libuuid", re.compile(r"\bUUID_(\d+\.\d+)", re.IGNORECASE)),
 ]
 
 SONAME_VERSION_RE = re.compile(r"^(lib[a-zA-Z0-9_+-]+?)(?:-(\d+(?:\.\d+)+))?\.so(?:\.(\d+(?:\.\d+)*))?$")
@@ -410,7 +412,11 @@ def _infer_library_identity(
             ver_suffix = m.group(3)
             detected_lib = prefix.lower()
             cand_ver = ver_inline or ver_suffix
-            if cand_ver and cand_ver not in {"0.0.0", "0.0", "0"}:
+            if (
+                cand_ver
+                and cand_ver not in {"0.0.0", "0.0", "0"}
+                and (ver_inline or (ver_suffix and "." in ver_suffix))
+            ):
                 detected_ver = cand_ver
 
     if not detected_lib:
